@@ -12,4 +12,5 @@ type UnitOfWork interface {
 	IsInTransaction() bool
 
 	Execute(ctx context.Context, fn func(ctx context.Context, tx *sql.Tx) error) error
+	GetTx() *sql.Tx
 }

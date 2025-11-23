@@ -1,30 +1,30 @@
 package messaging
 
-import(
-	"fmt"
-	"authentication/internal/infrastructure/messaging/rabbitmq"
+import (
+	"authentication/shared/logging"
+	"authentication/internal/application/contracts/messaging"
 	"authentication/internal/infrastructure/messaging/kafka"
 	"authentication/internal/infrastructure/messaging/nats"
-	"authentication/internal/application/contracts/messaging"
-
+	"authentication/internal/infrastructure/messaging/rabbitmq"
+	"fmt"
 )
 
 type BrokerType string
 
-const(
+const (
 	RabbitMQ BrokerType = "rabbitmq"
 	Kafka    BrokerType = "kafka"
-	NATS 	BrokerType = "nats"
+	NATS     BrokerType = "nats"
 )
 
-func NewEventBus(broker BrokerType, url string) (messaging.EventBus, error) {
+func NewEventBus(broker BrokerType, url string, logger logging.Logger) (messaging.EventBus, error) {
 	switch broker {
 	case RabbitMQ:
-		return rabbitmq.NewRabbitMQPublisher(url)
+		return rabbitmq.NewRabbitMQBus(url, logger)
 	case Kafka:
-		return kafka.NewKafkaBus(url)
+		return kafka.NewKafkaBus(url, logger)
 	case NATS:
-		return nats.NewNATSBus(url)
+		return nats.NewNATSBus(url, logger)
 	default:
 		return nil, fmt.Errorf("unsupported broker type: %s", broker)
 	}

@@ -1,22 +1,29 @@
 package uow
 
 import (
-	uow "authentication/shared/persistence"
 	"context"
 	"database/sql"
 	"fmt"
+
+	uow "authentication/shared/persistence"
 )
 
-type UnitOfWork struct {
+// unitOfWork is the base implementation without observability
+type unitOfWork struct {
 	db *sql.DB
 	tx *sql.Tx
 }
 
+// NewUnitOfWork creates a new unit of work
+// Note: For production use, wrap with NewInstrumentedUnitOfWork for observability
 func NewUnitOfWork(db *sql.DB) uow.UnitOfWork {
-	return &UnitOfWork{db: db}
+	return &unitOfWork{
+		db: db,
+	}
 }
 
-func (u *UnitOfWork) Begin(ctx context.Context) error {
+// Begin starts a new transaction
+func (u *unitOfWork) Begin(ctx context.Context) error {
 	if u.tx != nil {
 		return fmt.Errorf("transaction already started")
 	}
@@ -32,7 +39,8 @@ func (u *UnitOfWork) Begin(ctx context.Context) error {
 	return nil
 }
 
-func (u *UnitOfWork) Commit(ctx context.Context) error {
+// Commit commits the current transaction
+func (u *unitOfWork) Commit(ctx context.Context) error {
 	if u.tx == nil {
 		return fmt.Errorf("no active transaction")
 	}
@@ -45,9 +53,10 @@ func (u *UnitOfWork) Commit(ctx context.Context) error {
 	return nil
 }
 
-func (u *UnitOfWork) Rollback(ctx context.Context) error {
+// Rollback rolls back the current transaction
+func (u *unitOfWork) Rollback(ctx context.Context) error {
 	if u.tx == nil {
-		return nil
+		return nil // No active transaction, nothing to rollback
 	}
 
 	if err := u.tx.Rollback(); err != nil {
@@ -58,24 +67,31 @@ func (u *UnitOfWork) Rollback(ctx context.Context) error {
 	return nil
 }
 
-func (u *UnitOfWork) IsInTransaction() bool {
+// IsInTransaction returns true if a transaction is active
+func (u *unitOfWork) IsInTransaction() bool {
 	return u.tx != nil
 }
 
-// NEW SIGNATURE — recommended best practice
-func (u *UnitOfWork) Execute(
+// GetTx returns the current transaction
+func (u *unitOfWork) GetTx() *sql.Tx {
+	return u.tx
+}
+
+// Execute runs a function within a transaction with automatic commit/rollback
+func (u *unitOfWork) Execute(
 	ctx context.Context,
 	fn func(ctx context.Context, tx *sql.Tx) error,
 ) (err error) {
-
+	// Begin transaction
 	if err := u.Begin(ctx); err != nil {
 		return err
 	}
 
+	// Defer rollback on panic or error
 	defer func() {
 		if r := recover(); r != nil {
 			_ = u.Rollback(ctx)
-			err = fmt.Errorf("panic: %v", r)
+			err = fmt.Errorf("panic in transaction: %v", r)
 			return
 		}
 
@@ -85,10 +101,12 @@ func (u *UnitOfWork) Execute(
 		}
 	}()
 
+	// Execute function
 	err = fn(ctx, u.tx)
 	if err != nil {
 		return err
 	}
 
+	// Commit transaction
 	return u.Commit(ctx)
 }

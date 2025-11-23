@@ -20,6 +20,7 @@ func Load() (*Config, error) {
 		SMS:      loadSMSConfig(),
 		Logging:  loadLoggingConfig(),
 		Tracing:  loadTracingConfig(),
+		Metrics:  loadMetricsConfig(),
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -102,11 +103,45 @@ func loadJWTConfig() JWTConfig {
 }
 
 func loadTracingConfig() TracerConfig {
+	sampleRatio := getEnvFloat("TRACING_SAMPLE_RATIO", 0.01)
+	environment := getEnvOrDefault("APP_ENV", "development")
+
+	if os.Getenv("TRACING_SAMPLE_RATIO") == "" {
+		switch environment {
+		case "production":
+			sampleRatio = 0.01 // 1% in production (cost optimization)
+		case "staging":
+			sampleRatio = 0.1 // 10% in staging
+		case "development":
+			sampleRatio = 1.0 // 100% in development
+		}
+	}
+
 	return TracerConfig{
-		ServiceName:    getEnvOrDefault("APP_NAME", "authentication-service"),
-		Environment:    getEnvOrDefault("APP_ENV", "development"),
-		JaegerEndpoint: getEnvOrDefault("JAEGER_ENDPOINT", "http://localhost:14268/api/traces"),
-		Enabled:        getEnvBool("TRACING_ENABLED", false),
+		ServiceName:        getEnvOrDefault("APP_NAME", "authentication-service"),
+		Environment:        environment,
+		Endpoint:           getEnvOrDefault("OTLP_ENDPOINT", "localhost:4318"),
+		Enabled:            getEnvBool("TRACING_ENABLED", false),
+		Insecure:           getEnvBool("TRACING_INSECURE", environment != "production"),
+		SampleRatio:        sampleRatio,
+		MaxQueueSize:       getEnvInt("TRACING_MAX_QUEUE_SIZE", 2048),
+		MaxExportBatchSize: getEnvInt("TRACING_MAX_EXPORT_BATCH_SIZE", 512),
+		BatchTimeout:       getEnvDuration("TRACING_BATCH_TIMEOUT", 5*time.Second),
+		HTTPTimeout:        getEnvDuration("TRACING_HTTP_TIMEOUT", 10*time.Second),
+		ShutdownTimeout:    getEnvDuration("TRACING_SHUTDOWN_TIMEOUT", 10*time.Second),
+	}
+}
+
+func loadMetricsConfig() MetricsConfig {
+	environment := getEnvOrDefault("APP_ENV", "development")
+	
+	return MetricsConfig{
+		Enabled:      getEnvBool("METRICS_ENABLED", true),
+		Port:         getEnvInt("METRICS_PORT", 9090),
+		MetricsPath:  getEnvOrDefault("METRICS_PATH", "/metrics"),
+		ServiceName:  getEnvOrDefault("APP_NAME", "authentication-service"),
+		Environment:  environment,
+		ScrapePeriod: getEnvDuration("METRICS_SCRAPE_PERIOD", 15*time.Second),
 	}
 }
 
@@ -147,18 +182,25 @@ func loadSMSConfig() SMSConfig {
 
 func loadLoggingConfig() LoggingConfig {
 	return LoggingConfig{
-		Level:      getEnvOrDefault("LOG_LEVEL", "info"),
-		Format:     getEnvOrDefault("LOG_FORMAT", "json"),
-		Output:     getEnvOrDefault("LOG_OUTPUT", "stdout"),
-		FilePath:   getEnvOrDefault("LOG_FILE_PATH", "./logs/app.log"),
-		MaxSize:    getEnvInt("LOG_MAX_SIZE", 100),
-		MaxBackups: getEnvInt("LOG_MAX_BACKUPS", 3),
-		MaxAge:     getEnvInt("LOG_MAX_AGE", 28),
-		Compress:   getEnvBool("LOG_COMPRESS", true),
+		Level:         getEnvOrDefault("LOG_LEVEL", "info"),
+		Format:        getEnvOrDefault("LOG_FORMAT", "json"),
+		Output:        getEnvOrDefault("LOG_OUTPUT", "stdout"),
+		FilePath:      getEnvOrDefault("LOG_FILE_PATH", "./logs/app.log"),
+		MaxSize:       getEnvInt("LOG_MAX_SIZE", 100),
+		MaxBackups:    getEnvInt("LOG_MAX_BACKUPS", 3),
+		MaxAge:        getEnvInt("LOG_MAX_AGE", 28),
+		Compress:      getEnvBool("LOG_COMPRESS", true),
+		
+		// Logstash configuration
+		LogstashEnabled:       getEnvBool("LOGSTASH_ENABLED", false),
+		LogstashHost:          getEnvOrDefault("LOGSTASH_HOST", "localhost"),
+		LogstashPort:          getEnvInt("LOGSTASH_PORT", 5000),
+		LogstashProtocol:      getEnvOrDefault("LOGSTASH_PROTOCOL", "tcp"),
+		LogstashRetryDelay:    getEnvDuration("LOGSTASH_RETRY_DELAY", 5*time.Second),
+		LogstashTimeout:       getEnvDuration("LOGSTASH_TIMEOUT", 10*time.Second),
+		LogstashReconnectWait: getEnvDuration("LOGSTASH_RECONNECT_WAIT", 30*time.Second),
 	}
 }
-
-
 
 // Helper functions
 func getEnvOrDefault(key, defaultValue string) string {
@@ -181,6 +223,15 @@ func getEnvBool(key string, defaultValue bool) bool {
 	if value := os.Getenv(key); value != "" {
 		if boolValue, err := strconv.ParseBool(value); err == nil {
 			return boolValue
+		}
+	}
+	return defaultValue
+}
+
+func getEnvFloat(key string, defaultValue float64) float64 {
+	if value := os.Getenv(key); value != "" {
+		if f, err := strconv.ParseFloat(value, 64); err == nil {
+			return f
 		}
 	}
 	return defaultValue

@@ -1,8 +1,9 @@
-package metrics
+package middleware
 
 import (
 	"time"
 	"fmt"
+	"authentication/internal/infrastructure/observability/metrics"
 
 	"github.com/gin-gonic/gin"
 )
@@ -17,7 +18,7 @@ func MetricsMiddleware() gin.HandlerFunc {
 		// Capture request size
 		reqSize := c.Request.ContentLength
 		if reqSize > 0 {
-			HTTPRequestSize.WithLabelValues(method, endpoint).Observe(float64(reqSize))
+			metrics.HTTPRequestSize.WithLabelValues(method, endpoint).Observe(float64(reqSize))
 		}
 
 		c.Next()
@@ -26,19 +27,19 @@ func MetricsMiddleware() gin.HandlerFunc {
 		duration := time.Since(start).Seconds()
 
 		// Increment request counter
-		HTTPRequestsTotal.
+		metrics.HTTPRequestsTotal.
 			WithLabelValues(method, endpoint, formatStatus(status)).
 			Inc()
 
 		// Observe duration
-		HTTPRequestDuration.
+		metrics.HTTPRequestDuration.
 			WithLabelValues(method, endpoint).
 			Observe(duration)
 
 		// Observe response size
 		resSize := c.Writer.Size()
 		if resSize > 0 {
-			HTTPResponseSize.WithLabelValues(method, endpoint).Observe(float64(resSize))
+			metrics.HTTPResponseSize.WithLabelValues(method, endpoint).Observe(float64(resSize))
 		}
 	}
 }

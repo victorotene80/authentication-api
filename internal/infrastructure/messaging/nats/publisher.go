@@ -1,30 +1,52 @@
 package nats
 
 import (
+	"authentication/shared/logging"
 	"authentication/internal/application/contracts/messaging"
+	"context"
+	"fmt"
 
 	"github.com/nats-io/nats.go"
+	"go.uber.org/zap"
 )
 
 type NATSBus struct {
-	conn *nats.Conn
+	conn   *nats.Conn
+	logger logging.Logger
 }
 
-func NewNATSBus(url string) (*NATSBus, error) {
-	conn, err := nats.Connect(url)
+func NewNATSBus(url string, logger logging.Logger) (*NATSBus, error) {
+	conn, err := nats.Connect(url,
+		nats.MaxReconnects(-1),
+		nats.ReconnectWait(2),
+	)
 	if err != nil {
-		return nil, err
+		logger.Error(context.Background(), "failed to connect to NATS",
+			zap.String("url", url),
+			zap.Error(err),
+		)
+		return nil, fmt.Errorf("nats connection failed: %w", err)
 	}
-	return &NATSBus{conn: conn}, nil
+
+	logger.Info(context.Background(), "connected to NATS", zap.String("url", url))
+
+	return &NATSBus{
+		conn:   conn,
+		logger: logger.With(zap.String("component", "nats_bus")),
+	}, nil
 }
 
 func (n *NATSBus) Publish(event messaging.Event) error {
-	return n.conn.Publish(event.Name, event.Payload)
-}
+	ctx := context.Background()
 
-func (n *NATSBus) Close() error {
-	if n.conn != nil && !n.conn.IsClosed() {
-		n.conn.Close()
+	err := n.conn.Publish(event.Name, event.Payload)
+	if err != nil {
+		n.logger.Error(ctx, "failed to publish to NATS",
+			zap.String("subject", event.Name),
+			zap.Error(err),
+		)
+		return fmt.Errorf("nats publish failed: %w", err)
 	}
+
 	return nil
 }

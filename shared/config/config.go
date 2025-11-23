@@ -17,13 +17,30 @@ type Config struct {
 	SMS      SMSConfig
 	Logging  LoggingConfig
 	Tracing  TracerConfig
+	Metrics  MetricsConfig
 }
 
 type TracerConfig struct {
-	ServiceName    string
-	Environment    string
-	JaegerEndpoint string
-	Enabled        bool
+	Enabled            bool          // enable tracing
+	Endpoint           string        // OTLP collector / Jaeger HTTP endpoint (host:port)
+	Insecure           bool          // skip TLS verification / use insecure connection (false in prod)
+	ServiceName        string        // service name for resource
+	Environment        string        // environment name (prod, staging, dev)
+	SampleRatio        float64       // e.g. 0.01 for 1% sampling in production
+	MaxQueueSize       int           // batcher max queue size
+	MaxExportBatchSize int           // batcher max export batch size
+	BatchTimeout       time.Duration // exporter batch timeout
+	HTTPTimeout        time.Duration // HTTP client timeout for exporter
+	ShutdownTimeout    time.Duration // timeout when shutting down tracer provider
+}
+
+type MetricsConfig struct {
+	Enabled      bool
+	Port         int
+	MetricsPath  string
+	ServiceName  string
+	Environment  string
+	ScrapePeriod time.Duration
 }
 
 type AppConfig struct {
@@ -121,6 +138,20 @@ type LoggingConfig struct {
 	MaxBackups int
 	MaxAge     int
 	Compress   bool
+
+	// Logstash integration
+	LogstashEnabled       bool
+	LogstashHost          string
+	LogstashPort          int
+	LogstashProtocol      string        // tcp or udp
+	LogstashRetryDelay    time.Duration // retry delay on connection failure
+	LogstashTimeout       time.Duration // write timeout
+	LogstashReconnectWait time.Duration // wait before reconnecting
+}
+
+// GetLogstashAddr returns the Logstash address
+func (l LoggingConfig) GetLogstashAddr() string {
+	return fmt.Sprintf("%s:%d", l.LogstashHost, l.LogstashPort)
 }
 
 func (d DatabaseConfig) GetDSN() string {
@@ -155,3 +186,4 @@ func (a AppConfig) IsProduction() bool {
 func (a AppConfig) IsDevelopment() bool {
 	return a.Environment == "development"
 }
+
