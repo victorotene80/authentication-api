@@ -3,258 +3,201 @@ package uow
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"time"
+
+	uow "authentication/shared/persistence"
+	"authentication/internal/infrastructure/observability/metrics"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
-
-	"authentication/shared/logging"
-	"authentication/internal/infrastructure/observability/metrics"
-	uow "authentication/shared/persistence"
-	"authentication/shared/tracing"
 )
 
-// InstrumentedUnitOfWork wraps a UnitOfWork with observability
-type InstrumentedUnitOfWork struct {
-	wrapped uow.UnitOfWork
-	logger  logging.Logger
-	tracer  tracing.Tracer
-	dbName  string
-	env     string
+
+// instrumentedUnitOfWork wraps unitOfWork with observability
+type instrumentedUnitOfWork struct {
+	*unitOfWork
+	logger  *zap.Logger
+	tracer  trace.Tracer
+	metrics *metrics.MetricsRecorder
 }
 
-// NewInstrumentedUnitOfWork creates a new instrumented unit of work with observability
+// NewInstrumentedUnitOfWork creates a new instrumented UnitOfWork with logger, tracer, and metrics
 func NewInstrumentedUnitOfWork(
-	base uow.UnitOfWork,
-	logger logging.Logger,
-	tracer tracing.Tracer,
-	dbName string,
-	env string,
+	db *sql.DB,
+	logger *zap.Logger,
+	tracer trace.Tracer,
+	metricsRecorder *metrics.MetricsRecorder,
 ) uow.UnitOfWork {
-	return &InstrumentedUnitOfWork{
-		wrapped: base,
-		logger:  logger.With(zap.String("component", "unit_of_work")),
-		tracer:  tracer,
-		dbName:  dbName,
-		env:     env,
+	return &instrumentedUnitOfWork{
+		unitOfWork: &unitOfWork{db: db},
+		logger:     logger.With(zap.String("component", "unit_of_work")),
+		tracer:     tracer,
+		metrics:    metricsRecorder,
 	}
 }
+// --- Instrumented implementation ---
 
-// Begin starts a new transaction with observability
-func (i *InstrumentedUnitOfWork) Begin(ctx context.Context) error {
-	ctx, span := i.tracer.StartSpan(ctx, "uow.begin", trace.WithSpanKind(trace.SpanKindClient))
+func (u *instrumentedUnitOfWork) Begin(ctx context.Context) error {
+	start := time.Now()
+	ctx, span := u.tracer.Start(ctx, "uow.Begin",
+		trace.WithSpanKind(trace.SpanKindInternal),
+		trace.WithAttributes(attribute.String("db.operation", "begin_transaction")),
+	)
 	defer span.End()
 
-	i.tracer.AddAttributes(span,
-		attribute.String("db.operation", "begin"),
-		attribute.String("db.name", i.dbName),
-	)
-
-	i.logger.Debug(ctx, "Beginning transaction",
-		zap.String("db_name", i.dbName),
-	)
-
-	start := time.Now()
-	err := i.wrapped.Begin(ctx)
+	u.logger.Debug("beginning transaction")
+	err := u.unitOfWork.Begin(ctx)
 	duration := time.Since(start)
 
 	if err != nil {
-		i.logger.Error(ctx, "Failed to begin transaction",
-			zap.Error(err),
-			zap.Duration("duration", duration),
-		)
-		i.tracer.RecordError(span, err,
-			attribute.String("error.type", "begin_failed"),
-		)
-		span.SetStatus(codes.Error, "begin failed")
+		u.logger.Error("failed to begin transaction", zap.Error(err), zap.Duration("duration", duration))
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to begin transaction")
+	} else {
+		u.logger.Debug("transaction started successfully", zap.Duration("duration", duration))
+		span.SetStatus(codes.Ok, "success")
+	}
+
+	span.SetAttributes(attribute.Float64("duration_ms", duration.Seconds()*1000))
+	if u.metrics != nil {
+		u.metrics.RecordDatabaseQuery(ctx, "BEGIN", "transaction", duration)
+	}
+
+	return err
+}
+
+func (u *instrumentedUnitOfWork) Commit(ctx context.Context) error {
+	start := time.Now()
+	ctx, span := u.tracer.Start(ctx, "uow.Commit",
+		trace.WithSpanKind(trace.SpanKindInternal),
+		trace.WithAttributes(attribute.String("db.operation", "commit_transaction")),
+	)
+	defer span.End()
+
+	u.logger.Debug("committing transaction")
+	err := u.unitOfWork.Commit(ctx)
+	duration := time.Since(start)
+
+	if err != nil {
+		u.logger.Error("failed to commit transaction", zap.Error(err), zap.Duration("duration", duration))
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to commit")
+	} else {
+		u.logger.Debug("transaction committed successfully", zap.Duration("duration", duration))
+		span.SetStatus(codes.Ok, "success")
+	}
+
+	span.SetAttributes(attribute.Float64("duration_ms", duration.Seconds()*1000))
+	if u.metrics != nil {
+		u.metrics.RecordDatabaseQuery(ctx, "COMMIT", "transaction", duration)
+	}
+
+	return err
+}
+
+func (u *instrumentedUnitOfWork) Rollback(ctx context.Context) error {
+	start := time.Now()
+	ctx, span := u.tracer.Start(ctx, "uow.Rollback",
+		trace.WithSpanKind(trace.SpanKindInternal),
+		trace.WithAttributes(attribute.String("db.operation", "rollback_transaction")),
+	)
+	defer span.End()
+
+	u.logger.Debug("rolling back transaction")
+	err := u.unitOfWork.Rollback(ctx)
+	duration := time.Since(start)
+
+	if err != nil {
+		u.logger.Error("failed to rollback transaction", zap.Error(err), zap.Duration("duration", duration))
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to rollback")
+	} else {
+		u.logger.Debug("transaction rolled back successfully", zap.Duration("duration", duration))
+		span.SetStatus(codes.Ok, "success")
+	}
+
+	span.SetAttributes(attribute.Float64("duration_ms", duration.Seconds()*1000))
+	if u.metrics != nil {
+		u.metrics.RecordDatabaseQuery(ctx, "ROLLBACK", "transaction", duration)
+	}
+
+	return err
+}
+
+func (u *instrumentedUnitOfWork) Execute(ctx context.Context, fn func(ctx context.Context, tx *sql.Tx) error) (err error) {
+	start := time.Now()
+	ctx, span := u.tracer.Start(ctx, "uow.Execute",
+		trace.WithSpanKind(trace.SpanKindInternal),
+		trace.WithAttributes(attribute.String("db.operation", "transaction")),
+	)
+	defer span.End()
+
+	u.logger.Debug("executing transaction")
+	if err := u.Begin(ctx); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to begin")
 		return err
 	}
 
-	i.logger.Debug(ctx, "Transaction started",
-		zap.Duration("duration", duration),
-	)
+	committed := false
+	rolledBack := false
 
-	i.tracer.AddAttributes(span,
-		attribute.Float64("duration_ms", float64(duration.Milliseconds())),
-	)
-	i.tracer.AddEvent(span, "transaction.started")
-	span.SetStatus(codes.Ok, "started")
+	defer func() {
+		duration := time.Since(start)
+		if r := recover(); r != nil {
+			_ = u.Rollback(ctx)
+			rolledBack = true
+			err = fmt.Errorf("panic in transaction: %v", r)
+			u.logger.Error("panic in transaction", zap.Any("panic", r), zap.Duration("duration", duration))
+			span.RecordError(err, trace.WithAttributes(attribute.String("error.type", "panic")))
+			span.SetStatus(codes.Error, "panic")
+		}
+		if err != nil && !rolledBack {
+			_ = u.Rollback(ctx)
+			rolledBack = true
+			u.logger.Warn("transaction rolled back due to error", zap.Error(err), zap.Duration("duration", duration))
+			span.AddEvent("transaction.rollback", trace.WithAttributes(attribute.String("reason", "error")))
+		}
+		span.SetAttributes(attribute.Float64("duration_ms", duration.Seconds()*1000),
+			attribute.Bool("committed", committed),
+			attribute.Bool("rolled_back", rolledBack),
+		)
+	}()
 
-	return nil
-}
-
-// Commit commits the current transaction with observability
-func (i *InstrumentedUnitOfWork) Commit(ctx context.Context) error {
-	ctx, span := i.tracer.StartSpan(ctx, "uow.commit", trace.WithSpanKind(trace.SpanKindClient))
-	defer span.End()
-
-	i.tracer.AddAttributes(span,
-		attribute.String("db.operation", "commit"),
-		attribute.String("db.name", i.dbName),
-	)
-
-	i.logger.Debug(ctx, "Committing transaction",
-		zap.String("db_name", i.dbName),
-	)
-
-	start := time.Now()
-	err := i.wrapped.Commit(ctx)
-	duration := time.Since(start)
-
+	// Execute the user function
+	err = fn(ctx, u.unitOfWork.tx)
 	if err != nil {
-		i.logger.Error(ctx, "Failed to commit transaction",
-			zap.Error(err),
-			zap.Duration("duration", duration),
-		)
-		i.tracer.RecordError(span, err,
-			attribute.String("error.type", "commit_failed"),
-		)
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "execution failed")
+		return err
+	}
+
+	err = u.Commit(ctx)
+	if err != nil {
+		span.RecordError(err)
 		span.SetStatus(codes.Error, "commit failed")
 		return err
 	}
 
-	i.logger.Debug(ctx, "Transaction committed",
-		zap.Duration("duration", duration),
-	)
-
-	i.tracer.AddAttributes(span,
-		attribute.Float64("duration_ms", float64(duration.Milliseconds())),
-	)
-	i.tracer.AddEvent(span, "transaction.committed")
-	span.SetStatus(codes.Ok, "committed")
-
-	return nil
-}
-
-// Rollback rolls back the current transaction with observability
-func (i *InstrumentedUnitOfWork) Rollback(ctx context.Context) error {
-	ctx, span := i.tracer.StartSpan(ctx, "uow.rollback", trace.WithSpanKind(trace.SpanKindClient))
-	defer span.End()
-
-	i.tracer.AddAttributes(span,
-		attribute.String("db.operation", "rollback"),
-		attribute.String("db.name", i.dbName),
-	)
-
-	i.logger.Warn(ctx, "Rolling back transaction",
-		zap.String("db_name", i.dbName),
-	)
-
-	start := time.Now()
-	err := i.wrapped.Rollback(ctx)
+	committed = true
 	duration := time.Since(start)
-
-	if err != nil {
-		i.logger.Error(ctx, "Failed to rollback transaction",
-			zap.Error(err),
-			zap.Duration("duration", duration),
-		)
-		i.tracer.RecordError(span, err,
-			attribute.String("error.type", "rollback_failed"),
-		)
-		span.SetStatus(codes.Error, "rollback failed")
-		return err
+	u.logger.Debug("transaction executed successfully", zap.Duration("duration", duration))
+	span.SetStatus(codes.Ok, "success")
+	span.AddEvent("transaction.commit")
+	if u.metrics != nil {
+		u.metrics.RecordDatabaseQuery(ctx, "EXECUTE", "transaction", duration)
 	}
-
-	i.logger.Debug(ctx, "Transaction rolled back",
-		zap.Duration("duration", duration),
-	)
-
-	i.tracer.AddAttributes(span,
-		attribute.Float64("duration_ms", float64(duration.Milliseconds())),
-	)
-	i.tracer.AddEvent(span, "transaction.rolled_back")
-	span.SetStatus(codes.Ok, "rolled back")
 
 	return nil
 }
 
-// IsInTransaction returns true if a transaction is active
-func (i *InstrumentedUnitOfWork) IsInTransaction() bool {
-	return i.wrapped.IsInTransaction()
+func (u *instrumentedUnitOfWork) IsInTransaction() bool {
+	return u.tx != nil
 }
 
-// GetTx returns the current transaction
-func (i *InstrumentedUnitOfWork) GetTx() *sql.Tx {
-	return i.wrapped.GetTx()
-}
-
-// Execute runs a function within a transaction with full observability
-func (i *InstrumentedUnitOfWork) Execute(
-	ctx context.Context,
-	fn func(ctx context.Context, tx *sql.Tx) error,
-) error {
-	ctx, span := i.tracer.StartSpan(ctx, "uow.execute", trace.WithSpanKind(trace.SpanKindClient))
-	defer span.End()
-
-	i.tracer.AddAttributes(span,
-		attribute.String("db.operation", "transaction"),
-		attribute.String("db.name", i.dbName),
-		attribute.String("db.system", "postgresql"),
-	)
-
-	i.logger.Debug(ctx, "Executing transaction",
-		zap.String("db_name", i.dbName),
-	)
-
-	start := time.Now()
-	err := i.wrapped.Execute(ctx, fn)
-	duration := time.Since(start).Seconds()
-
-	// Determine transaction status
-	status := "committed"
-	if err != nil {
-		status = "rolled_back"
-		
-		i.logger.Error(ctx, "Transaction failed and rolled back",
-			zap.Error(err),
-			zap.Duration("duration", time.Duration(duration*float64(time.Second))),
-		)
-
-		i.tracer.RecordError(span, err,
-			attribute.String("transaction.status", "rolled_back"),
-		)
-		span.SetStatus(codes.Error, "transaction failed")
-	} else {
-		i.logger.Debug(ctx, "Transaction completed successfully",
-			zap.Duration("duration", time.Duration(duration*float64(time.Second))),
-		)
-
-		i.tracer.AddAttributes(span,
-			attribute.String("transaction.status", "committed"),
-		)
-		span.SetStatus(codes.Ok, "committed")
-	}
-
-	// Record metrics
-	metrics.DatabaseTransactionDuration.Observe(duration)
-	metrics.DatabaseTransactionsTotal.WithLabelValues(status).Inc()
-
-	// Add transaction summary to trace
-	i.tracer.AddAttributes(span,
-		attribute.Float64("duration_ms", duration*1000),
-		attribute.String("status", status),
-	)
-
-	// Add event for transaction completion
-	i.tracer.AddEvent(span, "transaction.completed",
-		attribute.String("status", status),
-		attribute.Float64("duration_ms", duration*1000),
-	)
-
-	// Warn if transaction took too long (e.g., > 1 second)
-	if duration > 1.0 {
-		i.logger.Warn(ctx, "Slow transaction detected",
-			zap.Float64("duration_seconds", duration),
-			zap.String("status", status),
-		)
-
-		i.tracer.AddEvent(span, "transaction.slow",
-			attribute.Float64("duration_seconds", duration),
-		)
-	}
-
-	return err
+func (u *instrumentedUnitOfWork) GetTx() *sql.Tx {
+	return u.tx
 }

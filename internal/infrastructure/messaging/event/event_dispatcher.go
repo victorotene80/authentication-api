@@ -1,15 +1,16 @@
 package event
 
 import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
 	"authentication/internal/application/contracts/messaging"
 	"authentication/internal/domain/events"
 	"authentication/internal/infrastructure/observability/metrics"
 	"authentication/shared/logging"
 	"authentication/shared/tracing"
-	"context"
-	"fmt"
-	"sync"
-	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -17,26 +18,33 @@ import (
 	"go.uber.org/zap"
 )
 
-// CompositeEventDispatcher implements contracts.EventDispatcher
+// CompositeEventDispatcher implements messaging.EventDispatcher with observability.
 type CompositeEventDispatcher struct {
 	handlers []messaging.EventHandler
 	async    bool
 	mu       sync.RWMutex
 	logger   logging.Logger
 	tracer   tracing.Tracer
+	metrics  *metrics.MetricsRecorder
 }
 
-// NewCompositeEventDispatcher creates a new multi-handler dispatcher
-func NewCompositeEventDispatcher(async bool, logger logging.Logger, tracer tracing.Tracer) messaging.EventDispatcher {
+// NewCompositeEventDispatcher creates a new dispatcher.
+func NewCompositeEventDispatcher(
+	async bool,
+	logger logging.Logger,
+	tracer tracing.Tracer,
+	metricsRecorder *metrics.MetricsRecorder,
+) messaging.EventDispatcher {
 	return &CompositeEventDispatcher{
 		handlers: make([]messaging.EventHandler, 0),
 		async:    async,
 		logger:   logger.With(zap.String("component", "event_dispatcher")),
 		tracer:   tracer,
+		metrics:  metricsRecorder,
 	}
 }
 
-// RegisterHandler adds a new event handler
+// RegisterHandler adds a new event handler.
 func (d *CompositeEventDispatcher) RegisterHandler(handler messaging.EventHandler) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -48,19 +56,15 @@ func (d *CompositeEventDispatcher) RegisterHandler(handler messaging.EventHandle
 	)
 }
 
-// Dispatch sends event to all registered handlers (legacy method for compatibility)
+// Dispatch sends event to all handlers (legacy method).
 func (d *CompositeEventDispatcher) Dispatch(event events.DomainEvent) error {
 	return d.DispatchWithContext(context.Background(), event)
 }
 
-// DispatchWithContext dispatches event with context and full observability
+// DispatchWithContext dispatches event with context, tracing, logging, and metrics.
 func (d *CompositeEventDispatcher) DispatchWithContext(ctx context.Context, event events.DomainEvent) error {
 	eventName := event.EventName()
-
-	// Start trace span
-	ctx, span := d.tracer.StartSpan(
-		ctx,
-		"event.dispatch."+eventName,
+	ctx, span := d.tracer.StartSpan(ctx, "event.dispatch."+eventName,
 		trace.WithSpanKind(trace.SpanKindProducer),
 	)
 	defer span.End()
@@ -82,21 +86,20 @@ func (d *CompositeEventDispatcher) DispatchWithContext(ctx context.Context, even
 	start := time.Now()
 
 	d.mu.RLock()
-	handlers := d.handlers
+	handlers := make([]messaging.EventHandler, len(d.handlers))
+	copy(handlers, d.handlers)
 	d.mu.RUnlock()
 
-	// Count handlers that will process this event
+	// Count handlers
 	var handlerCount int
 	for _, handler := range handlers {
 		if handler.CanHandle(eventName) {
 			handlerCount++
 		}
 	}
+	d.tracer.AddAttributes(span, attribute.Int("handlers.count", handlerCount))
 
-	d.tracer.AddAttributes(span,
-		attribute.Int("handlers.count", handlerCount),
-	)
-
+	// Dispatch
 	var err error
 	if d.async {
 		err = d.dispatchAsync(ctx, event, handlers)
@@ -104,71 +107,54 @@ func (d *CompositeEventDispatcher) DispatchWithContext(ctx context.Context, even
 		err = d.dispatchSync(ctx, event, handlers)
 	}
 
-	duration := time.Since(start).Seconds()
-
-	// Record metrics
+	duration := time.Since(start)
 	status := "success"
 	if err != nil {
 		status = "error"
 		d.logger.Error(ctx, "Event dispatch failed",
 			zap.Error(err),
 			zap.String("event_name", eventName),
-			zap.Duration("duration", time.Duration(duration*float64(time.Second))),
+			zap.Duration("duration", duration),
 		)
-
 		d.tracer.RecordError(span, err)
 		span.SetStatus(codes.Error, "dispatch failed")
 	} else {
 		d.logger.Debug(ctx, "Event dispatched successfully",
 			zap.String("event_name", eventName),
 			zap.Int("handlers_executed", handlerCount),
-			zap.Duration("duration", time.Duration(duration*float64(time.Second))),
+			zap.Duration("duration", duration),
 		)
-
 		span.SetStatus(codes.Ok, "success")
 	}
 
-	metrics.EventsPublished.WithLabelValues(eventName, status).Inc()
+	if d.metrics != nil {
+		d.metrics.RecordCommand(ctx, eventName, status, duration)
+	}
 
-	d.tracer.AddAttributes(span,
-		attribute.Float64("duration_ms", duration*1000),
-		attribute.String("status", status),
-	)
-
-	d.tracer.AddEvent(span, "event.dispatched",
-		attribute.Int("handlers_count", handlerCount),
-	)
+	d.tracer.AddEvent(span, "event.dispatched", attribute.Int("handlers_count", handlerCount))
+	d.tracer.AddAttributes(span, attribute.Float64("duration_ms", duration.Seconds()*1000), attribute.String("status", status))
 
 	return err
 }
 
-// DispatchAll dispatches multiple events
-func (d *CompositeEventDispatcher) DispatchAll(ctx context.Context, domainEvents []events.DomainEvent) error {
+// DispatchAll dispatches multiple events.
+func (d *CompositeEventDispatcher) DispatchAll(ctx context.Context, events []events.DomainEvent) error {
 	ctx, span := d.tracer.StartSpan(ctx, "event.dispatch_all")
 	defer span.End()
 
-	d.tracer.AddAttributes(span,
-		attribute.Int("events.count", len(domainEvents)),
-	)
+	d.tracer.AddAttributes(span, attribute.Int("events.count", len(events)))
+	d.logger.Info(ctx, "Dispatching multiple events", zap.Int("count", len(events)))
 
-	d.logger.Info(ctx, "Dispatching multiple events",
-		zap.Int("count", len(domainEvents)),
-	)
-
-	for i, event := range domainEvents {
-		if err := d.DispatchWithContext(ctx, event); err != nil {
+	for i, e := range events {
+		if err := d.DispatchWithContext(ctx, e); err != nil {
 			d.logger.Error(ctx, "Failed to dispatch event in batch",
 				zap.Error(err),
-				zap.String("event_name", event.EventName()),
+				zap.String("event_name", e.EventName()),
 				zap.Int("index", i),
 			)
-
-			d.tracer.RecordError(span, err,
-				attribute.Int("failed_at_index", i),
-			)
+			d.tracer.RecordError(span, err, attribute.Int("failed_at_index", i))
 			span.SetStatus(codes.Error, "batch dispatch failed")
-
-			return fmt.Errorf("failed to dispatch event %s at index %d: %w", event.EventName(), i, err)
+			return fmt.Errorf("failed to dispatch event %s at index %d: %w", e.EventName(), i, err)
 		}
 	}
 
@@ -176,25 +162,22 @@ func (d *CompositeEventDispatcher) DispatchAll(ctx context.Context, domainEvents
 	return nil
 }
 
-// dispatchSync dispatches event synchronously to all handlers
+// dispatchSync dispatches event synchronously.
 func (d *CompositeEventDispatcher) dispatchSync(ctx context.Context, event events.DomainEvent, handlers []messaging.EventHandler) error {
 	eventName := event.EventName()
 	var errs []error
 
-	for i, handler := range handlers {
-		if !handler.CanHandle(eventName) {
+	for i, h := range handlers {
+		if !h.CanHandle(eventName) {
 			continue
 		}
 
-		// Create span for each handler
 		handlerCtx, handlerSpan := d.tracer.StartSpan(ctx, "event.handle."+eventName)
-		d.tracer.AddAttributes(handlerSpan,
-			attribute.String("handler.index", fmt.Sprintf("%d", i)),
-		)
+		d.tracer.AddAttributes(handlerSpan, attribute.Int("handler.index", i))
 
 		start := time.Now()
-		err := handler.Handle(handlerCtx, event)
-		duration := time.Since(start).Seconds()
+		err := h.Handle(handlerCtx, event)
+		duration := time.Since(start)
 
 		if err != nil {
 			d.logger.Error(handlerCtx, "Event handler failed",
@@ -202,55 +185,54 @@ func (d *CompositeEventDispatcher) dispatchSync(ctx context.Context, event event
 				zap.String("event_name", eventName),
 				zap.Int("handler_index", i),
 			)
-
 			d.tracer.RecordError(handlerSpan, err)
 			handlerSpan.SetStatus(codes.Error, "handler failed")
 			errs = append(errs, fmt.Errorf("handler %d error: %w", i, err))
-
-			metrics.EventsProcessed.WithLabelValues(eventName, "error").Inc()
+			if d.metrics != nil {
+				d.metrics.RecordCommand(handlerCtx, eventName, "error", duration)
+			}
 		} else {
 			handlerSpan.SetStatus(codes.Ok, "success")
-			metrics.EventsProcessed.WithLabelValues(eventName, "success").Inc()
+			if d.metrics != nil {
+				d.metrics.RecordCommand(handlerCtx, eventName, "success", duration)
+			}
 		}
 
-		metrics.EventProcessingDuration.WithLabelValues(eventName).Observe(duration)
 		handlerSpan.End()
 	}
 
 	if len(errs) > 0 {
 		return fmt.Errorf("dispatch errors: %v", errs)
 	}
-
 	return nil
 }
 
-// dispatchAsync dispatches event asynchronously to all handlers
+// dispatchAsync dispatches event asynchronously.
 func (d *CompositeEventDispatcher) dispatchAsync(ctx context.Context, event events.DomainEvent, handlers []messaging.EventHandler) error {
 	eventName := event.EventName()
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(handlers))
 
-	for i, handler := range handlers {
-		if !handler.CanHandle(eventName) {
+	for i, h := range handlers {
+		if !h.CanHandle(eventName) {
 			continue
 		}
 
 		wg.Add(1)
-		go func(h messaging.EventHandler, index int) {
+		go func(handler messaging.EventHandler, index int) {
 			defer wg.Done()
 
-			// Create span for async handler
 			handlerCtx, handlerSpan := d.tracer.StartSpan(ctx, "event.handle_async."+eventName)
 			defer handlerSpan.End()
 
 			d.tracer.AddAttributes(handlerSpan,
-				attribute.String("handler.index", fmt.Sprintf("%d", index)),
+				attribute.Int("handler.index", index),
 				attribute.Bool("async", true),
 			)
 
 			start := time.Now()
-			err := h.Handle(handlerCtx, event)
-			duration := time.Since(start).Seconds()
+			err := handler.Handle(handlerCtx, event)
+			duration := time.Since(start)
 
 			if err != nil {
 				d.logger.Error(handlerCtx, "Async event handler failed",
@@ -258,26 +240,24 @@ func (d *CompositeEventDispatcher) dispatchAsync(ctx context.Context, event even
 					zap.String("event_name", eventName),
 					zap.Int("handler_index", index),
 				)
-
 				d.tracer.RecordError(handlerSpan, err)
 				handlerSpan.SetStatus(codes.Error, "handler failed")
 				errChan <- fmt.Errorf("async handler %d error: %w", index, err)
-
-				metrics.EventsProcessed.WithLabelValues(eventName, "error").Inc()
+				if d.metrics != nil {
+					d.metrics.RecordCommand(handlerCtx, eventName, "error", duration)
+				}
 			} else {
 				handlerSpan.SetStatus(codes.Ok, "success")
-				metrics.EventsProcessed.WithLabelValues(eventName, "success").Inc()
+				if d.metrics != nil {
+					d.metrics.RecordCommand(handlerCtx, eventName, "success", duration)
+				}
 			}
-
-			metrics.EventProcessingDuration.WithLabelValues(eventName).Observe(duration)
-		}(handler, i)
+		}(h, i)
 	}
 
-	// Wait for all handlers to complete
 	wg.Wait()
 	close(errChan)
 
-	// Collect errors
 	var errs []error
 	for err := range errChan {
 		errs = append(errs, err)
@@ -286,10 +266,10 @@ func (d *CompositeEventDispatcher) dispatchAsync(ctx context.Context, event even
 	if len(errs) > 0 {
 		return fmt.Errorf("async dispatch errors: %v", errs)
 	}
-
 	return nil
 }
 
+// GetHandlerCount returns number of registered handlers.
 func (d *CompositeEventDispatcher) GetHandlerCount() int {
 	d.mu.RLock()
 	defer d.mu.RUnlock()

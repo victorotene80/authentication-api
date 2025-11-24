@@ -31,6 +31,16 @@ type MetricsRecorder struct {
 	loginFailures       metric.Int64Counter
 	activeUsers         metric.Int64UpDownCounter
 	registrationCounter metric.Int64Counter
+
+	// CQRS/Command metrics
+	commandExecutionTotal    metric.Int64Counter
+	commandExecutionDuration metric.Float64Histogram
+	queryExecutionTotal      metric.Int64Counter
+	queryExecutionDuration   metric.Float64Histogram
+
+	// Transaction metrics
+	transactionTotal    metric.Int64Counter
+	transactionDuration metric.Float64Histogram
 }
 
 // NewMetricsRecorder creates a new metrics recorder
@@ -159,6 +169,62 @@ func NewMetricsRecorder(meter metric.Meter) (*MetricsRecorder, error) {
 		return nil, fmt.Errorf("failed to create registration counter: %w", err)
 	}
 
+	// CQRS/Command metrics
+	mr.commandExecutionTotal, err = meter.Int64Counter(
+		"command.execution.total",
+		metric.WithDescription("Total number of command executions"),
+		metric.WithUnit("{execution}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create command execution counter: %w", err)
+	}
+
+	mr.commandExecutionDuration, err = meter.Float64Histogram(
+		"command.execution.duration",
+		metric.WithDescription("Command execution duration in seconds"),
+		metric.WithUnit("s"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create command execution duration histogram: %w", err)
+	}
+
+	mr.queryExecutionTotal, err = meter.Int64Counter(
+		"query.execution.total",
+		metric.WithDescription("Total number of query executions"),
+		metric.WithUnit("{execution}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create query execution counter: %w", err)
+	}
+
+	mr.queryExecutionDuration, err = meter.Float64Histogram(
+		"query.execution.duration",
+		metric.WithDescription("Query execution duration in seconds"),
+		metric.WithUnit("s"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create query execution duration histogram: %w", err)
+	}
+
+	// Transaction metrics
+	mr.transactionTotal, err = meter.Int64Counter(
+		"db.transaction.total",
+		metric.WithDescription("Total number of database transactions"),
+		metric.WithUnit("{transaction}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create transaction counter: %w", err)
+	}
+
+	mr.transactionDuration, err = meter.Float64Histogram(
+		"db.transaction.duration",
+		metric.WithDescription("Database transaction duration in seconds"),
+		metric.WithUnit("s"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create transaction duration histogram: %w", err)
+	}
+
 	return mr, nil
 }
 
@@ -247,7 +313,39 @@ func (mr *MetricsRecorder) RecordUserLogout(ctx context.Context) {
 // RecordUserRegistration records a new user registration
 func (mr *MetricsRecorder) RecordUserRegistration(ctx context.Context, method string) {
 	attrs := []attribute.KeyValue{
-		attribute.String("registration.method", method), // e.g., "email", "oauth"
+		attribute.String("registration.method", method),
 	}
 	mr.registrationCounter.Add(ctx, 1, metric.WithAttributes(attrs...))
+}
+
+// RecordCommand records command execution metrics
+func (mr *MetricsRecorder) RecordCommand(ctx context.Context, commandName, status string, duration time.Duration) {
+	attrs := []attribute.KeyValue{
+		attribute.String("command.name", commandName),
+		attribute.String("status", status),
+	}
+
+	mr.commandExecutionTotal.Add(ctx, 1, metric.WithAttributes(attrs...))
+	mr.commandExecutionDuration.Record(ctx, duration.Seconds(), metric.WithAttributes(attrs...))
+}
+
+// RecordQuery records query execution metrics
+func (mr *MetricsRecorder) RecordQuery(ctx context.Context, queryName, status string, duration time.Duration) {
+	attrs := []attribute.KeyValue{
+		attribute.String("query.name", queryName),
+		attribute.String("status", status),
+	}
+
+	mr.queryExecutionTotal.Add(ctx, 1, metric.WithAttributes(attrs...))
+	mr.queryExecutionDuration.Record(ctx, duration.Seconds(), metric.WithAttributes(attrs...))
+}
+
+// RecordTransaction records transaction metrics
+func (mr *MetricsRecorder) RecordTransaction(ctx context.Context, outcome string, duration time.Duration) {
+	attrs := []attribute.KeyValue{
+		attribute.String("outcome", outcome), // "committed", "rolled_back", "panic"
+	}
+
+	mr.transactionTotal.Add(ctx, 1, metric.WithAttributes(attrs...))
+	mr.transactionDuration.Record(ctx, duration.Seconds(), metric.WithAttributes(attrs...))
 }

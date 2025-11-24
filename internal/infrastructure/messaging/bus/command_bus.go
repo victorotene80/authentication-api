@@ -22,15 +22,22 @@ type CommandBus struct {
 	mu       sync.RWMutex
 	chain    []messaging.CommandMiddleware
 	logger   logging.Logger
-	tracingr tracing.Tracer
+	tracer   tracing.Tracer
+	metrics  *metrics.MetricsRecorder
 }
 
-func NewCommandBus(logger logging.Logger, tracingr tracing.Tracer) *CommandBus {
+// NewCommandBus creates a new instrumented CommandBus with logger, tracer, and metrics
+func NewCommandBus(
+	logger logging.Logger,
+	tracer tracing.Tracer,
+	metricsRecorder *metrics.MetricsRecorder,
+) *CommandBus {
 	return &CommandBus{
 		handlers: make(map[string]messaging.CommandHandler),
 		chain:    make([]messaging.CommandMiddleware, 0),
 		logger:   logger.With(zap.String("component", "command_bus")),
-		tracingr: tracingr,
+		tracer:   tracer,
+		metrics:  metricsRecorder,
 	}
 }
 
@@ -47,7 +54,6 @@ func (cb *CommandBus) Register(cmd messaging.Command, handler messaging.CommandH
 	}
 
 	cb.handlers[cmdName] = handler
-
 	cb.logger.Debug(context.Background(), "Command handler registered",
 		zap.String("command", cmdName),
 	)
@@ -75,14 +81,14 @@ func (cb *CommandBus) Execute(ctx context.Context, cmd messaging.Command) error 
 	const slowCommandThreshold = 1.0 // seconds
 
 	// Start tracing span
-	ctx, span := cb.tracingr.StartSpan(
+	ctx, span := cb.tracer.StartSpan(
 		ctx,
 		"command."+cmdName,
 		trace.WithSpanKind(trace.SpanKindInternal),
 	)
 	defer span.End()
 
-	cb.tracingr.AddAttributes(span,
+	cb.tracer.AddAttributes(span,
 		attribute.String("command.name", cmdName),
 		attribute.String("command.type", "command"),
 	)
@@ -93,7 +99,7 @@ func (cb *CommandBus) Execute(ctx context.Context, cmd messaging.Command) error 
 
 	start := utils.NowUTC()
 
-	// Get handler
+	// Get handler and middleware chain
 	cb.mu.RLock()
 	handler, exists := cb.handlers[cmdName]
 	chain := make([]messaging.CommandMiddleware, len(cb.chain))
@@ -102,22 +108,24 @@ func (cb *CommandBus) Execute(ctx context.Context, cmd messaging.Command) error 
 
 	if !exists {
 		err := fmt.Errorf("no handler registered for command: %s", cmdName)
-
 		cb.logger.Error(ctx, "Command handler not found",
 			zap.Error(err),
 			zap.String("command", cmdName),
 		)
 
-		cb.tracingr.RecordError(span, err,
+		cb.tracer.RecordError(span, err,
 			attribute.String("error.type", "handler_not_found"),
 		)
 		span.SetStatus(codes.Error, "handler not found")
 
-		metrics.CommandExecutionTotal.WithLabelValues(cmdName, "handler_not_found").Inc()
+		if cb.metrics != nil {
+			cb.metrics.RecordCommand(ctx, cmdName, "handler_not_found", time.Since(start))
+		}
+
 		return err
 	}
 
-	// --- Execute command ---
+	// Execute command through middleware
 	var err error
 	if len(chain) == 0 {
 		err = handler.Handle(ctx, cmd)
@@ -127,14 +135,14 @@ func (cb *CommandBus) Execute(ctx context.Context, cmd messaging.Command) error 
 
 	// Calculate duration
 	durationSecs := time.Since(start).Seconds()
-
-	// Metrics
 	status := "success"
 	if err != nil {
 		status = "error"
 	}
-	metrics.CommandExecutionTotal.WithLabelValues(cmdName, status).Inc()
-	metrics.CommandExecutionDuration.WithLabelValues(cmdName).Observe(durationSecs)
+
+	if cb.metrics != nil {
+		cb.metrics.RecordCommand(ctx, cmdName, "handler_not_found", time.Since(start))
+	}
 
 	// Logging + Tracing
 	if err != nil {
@@ -143,10 +151,9 @@ func (cb *CommandBus) Execute(ctx context.Context, cmd messaging.Command) error 
 			zap.String("command", cmdName),
 			zap.Float64("duration_seconds", durationSecs),
 		)
-
 		span.SetStatus(codes.Error, "execution failed")
-		cb.tracingr.RecordError(span, err)
-		cb.tracingr.AddEvent(span, "command.error",
+		cb.tracer.RecordError(span, err)
+		cb.tracer.AddEvent(span, "command.error",
 			attribute.String("command.name", cmdName),
 			attribute.String("error", err.Error()),
 		)
@@ -155,28 +162,25 @@ func (cb *CommandBus) Execute(ctx context.Context, cmd messaging.Command) error 
 			zap.String("command", cmdName),
 			zap.Float64("duration_seconds", durationSecs),
 		)
-
 		span.SetStatus(codes.Ok, "success")
-		cb.tracingr.AddEvent(span, "command.success",
+		cb.tracer.AddEvent(span, "command.success",
 			attribute.String("command.name", cmdName),
 		)
 	}
 
-	// Attach final attributes
-	cb.tracingr.AddAttributes(span,
+	cb.tracer.AddAttributes(span,
 		attribute.Float64("duration_seconds", durationSecs),
 		attribute.Float64("duration_ms", durationSecs*1000),
 		attribute.String("status", status),
 	)
 
-	// --- Slow Command Detection ---
+	// Detect slow commands
 	if durationSecs > slowCommandThreshold {
 		cb.logger.Warn(ctx, "Slow command execution detected",
 			zap.String("command", cmdName),
 			zap.Float64("duration_seconds", durationSecs),
 		)
-
-		cb.tracingr.AddEvent(span, "command.slow",
+		cb.tracer.AddEvent(span, "command.slow",
 			attribute.Float64("duration_seconds", durationSecs),
 			attribute.String("command.name", cmdName),
 		)
@@ -205,35 +209,5 @@ func (cb *CommandBus) GetRegisteredCommands() []string {
 	for cmdName := range cb.handlers {
 		commands = append(commands, cmdName)
 	}
-
 	return commands
 }
-
-/*func (cb *CommandBus) executeWithMiddleware(ctx context.Context, cmd contracts.Command, handler contracts.CommandHandler, chain []contracts.CommandMiddleware) error {
-	if len(chain) == 0 {
-		return handler.Handle(ctx, cmd)
-	}
-
-	return chain[0].Execute(ctx, cmd, CommandHandlerFunc(func(c context.Context, command contracts.Command) error {
-		return cb.executeWithMiddleware(c, command, handler, chain[1:])
-	}))
-}*/
-
-
-/*func (cb *CommandBus) Execute(ctx context.Context, cmd messaging.Command) error {
-	cb.mu.RLock()
-	handler, exists := cb.handlers[cmd.CommandName()]
-	chain := make([]messaging.CommandMiddleware, len(cb.chain))
-	copy(chain, cb.chain)
-	cb.mu.RUnlock()
-
-	if !exists {
-		return fmt.Errorf("no handler registered for command: %s", cmd.CommandName())
-	}
-
-	if len(chain) == 0 {
-		return handler.Handle(ctx, cmd)
-	}
-
-	return cb.executeWithMiddleware(ctx, cmd, handler, chain)
-}*/
