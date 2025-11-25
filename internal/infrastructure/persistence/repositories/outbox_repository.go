@@ -2,7 +2,7 @@ package repositories
 
 import (
 	"authentication/internal/domain/entities"
-	"authentication/internal/application/contracts"
+	contracts "authentication/internal/application/contracts/persistence"
 	uow "authentication/shared/persistence"
 	"context"
 	"time"

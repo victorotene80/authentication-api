@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"authentication/internal/domain"
+	"authentication/internal/domain/aggregates"
 	"authentication/internal/domain/events"
 	"authentication/internal/domain/valueobjects"
 	"authentication/shared/utils"
@@ -21,7 +22,7 @@ const (
 )
 
 type User struct {
-	domain.AggregateRoot // embed AggregateRoot for event handling
+	aggregates.AggregateRoot // embed AggregateRoot for event handling
 
 	id                  uuid.UUID
 	email               valueobjects.Email

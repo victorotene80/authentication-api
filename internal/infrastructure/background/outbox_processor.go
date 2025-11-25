@@ -1,7 +1,7 @@
 package background
 
 import (
-	"authentication/internal/application/contracts"
+	contracts "authentication/internal/application/contracts/persistence"
 	"authentication/internal/application/contracts/messaging"
 	"authentication/shared/logging"
 	"context"

@@ -4,8 +4,9 @@ import (
 	"context"
 	"time"
 
-	"authentication/internal/application/contracts"
+	contracts "authentication/internal/application/contracts/persistence"
 	"authentication/internal/infrastructure/observability/metrics"
+	//"authentication/internal/infrastructure/persistence"
 	"authentication/shared/tracing"
 	"authentication/shared/utils"
 
