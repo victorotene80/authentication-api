@@ -7,7 +7,7 @@ import (
 	"authentication/internal/domain/valueobjects"
 	"authentication/internal/infrastructure/persistence/database/models"
 	"authentication/internal/infrastructure/persistence/mappers"
-	uow "authentication/shared/persistence"
+	uow "authentication/internal/application/contracts/persistence"
 	"context"
 	"database/sql"
 	"errors"

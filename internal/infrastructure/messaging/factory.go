@@ -3,9 +3,9 @@ package messaging
 import (
 	"authentication/shared/logging"
 	"authentication/internal/application/contracts/messaging"
-	"authentication/internal/infrastructure/messaging/kafka"
-	"authentication/internal/infrastructure/messaging/nats"
-	"authentication/internal/infrastructure/messaging/rabbitmq"
+	"authentication/internal/infrastructure/messaging/brokers/kafka"
+	"authentication/internal/infrastructure/messaging/brokers/nats"
+	"authentication/internal/infrastructure/messaging/brokers/rabbitmq"
 	"fmt"
 )
 

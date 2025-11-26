@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	uow "authentication/shared/persistence"
+	uow "authentication/internal/application/contracts/persistence"
 	"authentication/internal/infrastructure/observability/metrics"
 
 	"go.opentelemetry.io/otel/attribute"

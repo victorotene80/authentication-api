@@ -34,6 +34,15 @@ type TracerConfig struct {
 	ShutdownTimeout    time.Duration // timeout when shutting down tracer provider
 }
 
+type PasswordPolicy struct {
+	MinLength      int
+	MaxLength      int
+	RequireUpper   bool
+	RequireLower   bool
+	RequireDigit   bool
+	RequireSpecial bool
+}
+
 type MetricsConfig struct {
 	Enabled      bool
 	Port         int

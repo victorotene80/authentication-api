@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	uow "authentication/shared/persistence"
+	uow "authentication/internal/application/contracts/persistence"
 )
 
 // unitOfWork is the base implementation without observability

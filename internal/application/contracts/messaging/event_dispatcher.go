@@ -5,7 +5,6 @@ import (
 	"context"
 )
 
-// EventDispatcher defines how domain events are dispatched (to the outbox, broker, etc.)
 type EventDispatcher interface {
 	RegisterHandler(handler EventHandler)
 	Dispatch(event events.DomainEvent) error

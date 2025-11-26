@@ -2,32 +2,21 @@ package repositories
 
 import (
 	"context"
-	"time"
-	"github.com/google/uuid"
+
+	uow "authentication/internal/application/contracts/persistence"
 	"authentication/internal/domain/entities"
 )
 
 type SessionRepository interface {
-	// Session operations
-	CreateSession(ctx context.Context, session *entities.Session) error
-	GetSessionByID(ctx context.Context, id uuid.UUID) (*entities.Session, error)
-	GetActiveSessionsByUserID(ctx context.Context, userID uuid.UUID) ([]*entities.Session, error)
-	UpdateSession(ctx context.Context, session *entities.Session) error
-	DeleteSession(ctx context.Context, id uuid.UUID) error
-	EndSession(ctx context.Context, id uuid.UUID, reason string) error
-	EndAllUserSessions(ctx context.Context, userID uuid.UUID, reason string) error
-	
-	// Refresh token operations
-	CreateRefreshToken(ctx context.Context, token *entities.RefreshToken) error
-	GetRefreshTokenByHash(ctx context.Context, tokenHash string) (*entities.RefreshToken, error)
-	GetRefreshTokensByFamily(ctx context.Context, tokenFamily uuid.UUID) ([]*entities.RefreshToken, error)
-	RevokeRefreshToken(ctx context.Context, tokenHash string, reason string) error
-	RevokeTokenFamily(ctx context.Context, tokenFamily uuid.UUID, reason string) error
-	RevokeAllUserTokens(ctx context.Context, userID uuid.UUID, reason string) error
-	DeleteExpiredTokens(ctx context.Context) error
-	
-	// Token blacklist operations
-	BlacklistToken(ctx context.Context, jti string, userID uuid.UUID, expiresAt time.Time, reason string) error
-	IsTokenBlacklisted(ctx context.Context, jti string) (bool, error)
-	CleanupExpiredBlacklist(ctx context.Context) error
+	Create(ctx context.Context, tx uow.DB, session *entities.Session) error
+	FindByID(ctx context.Context, tx uow.DB, id string) (*entities.Session, error)
+	FindByRefreshToken(ctx context.Context, tx uow.DB, refreshToken string) (*entities.Session, error)
+	FindByUserID(ctx context.Context, tx uow.DB, userID string) ([]*entities.Session, error)
+	FindActiveByUserID(ctx context.Context, tx uow.DB, userID string) ([]*entities.Session, error)
+	Update(ctx context.Context, tx uow.DB, session *entities.Session) error
+	Delete(ctx context.Context, tx uow.DB, id string) error
+	DeleteByUserID(ctx context.Context, tx uow.DB, userID string) error
+	DeleteExpired(ctx context.Context, tx uow.DB) error
+	RevokeByUserID(ctx context.Context, tx uow.DB, userID string) error
+	RevokeByID(ctx context.Context, tx uow.DB, id string) error
 }

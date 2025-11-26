@@ -1,16 +1,49 @@
 package aggregates
 
-import "authentication/internal/domain/events"
+import (
+	"authentication/internal/domain/events"
+	"authentication/shared/utils"
+	"time"
+)
 
-// AggregateRoot provides reusable event management
 type AggregateRoot struct {
-	version int64 // Add this for optimistic locking
-	events  []events.DomainEvent
+	id        string
+	version   int
+	events    []events.DomainEvent
+	createdAt time.Time
+	updatedAt time.Time
 }
 
-// AddEvent registers a new event
+func NewAggregateRoot(id string) *AggregateRoot {
+	now := utils.NowUTC()
+	return &AggregateRoot{
+		id:        id,
+		version:   1,
+		events:    make([]events.DomainEvent, 0),
+		createdAt: now,
+		updatedAt: now,
+	}
+}
+
+func (a *AggregateRoot) ID() string {
+	return a.id
+}
+
+func (a *AggregateRoot) Version() int {
+	return a.version
+}
+
+func (a *AggregateRoot) GetEvents() []events.DomainEvent {
+	return a.events
+}
+
+func (a *AggregateRoot) IncrementVersion() {
+	a.version++
+	a.updatedAt = time.Now()
+}
+
 func (a *AggregateRoot) AddEvent(event events.DomainEvent) {
-	a.events = append(a.events, event)
+    a.events = append(a.events, event)
 }
 
 // DomainEvents returns a copy of all events (immutable)
@@ -20,10 +53,6 @@ func (a *AggregateRoot) DomainEvents() []events.DomainEvent {
 	return eventsCopy
 }
 
-// ClearEvents clears all registered events
 func (a *AggregateRoot) ClearEvents() {
-	a.events = []events.DomainEvent{}
+	a.events = make([]events.DomainEvent, 0)
 }
-
-func (a *AggregateRoot) Version() int64    { return a.version }
-func (a *AggregateRoot) IncrementVersion() { a.version++ }

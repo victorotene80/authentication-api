@@ -7,56 +7,47 @@ import (
 )
 
 type Session struct {
-	ID               uuid.UUID
-	UserID           uuid.UUID
-	RefreshTokenHash string
-	TokenFamily      uuid.UUID
-	DeviceID         string
-	DeviceName       string
-	UserAgent        string
-	IPAddress        string
-	CountryCode      string
-	City             string
-	CreatedAt        time.Time
-	LastActivityAt   time.Time
-	ExpiresAt        time.Time
-	IsActive         bool
-	EndedAt          *time.Time
-	EndReason        string
+	ID           string
+	UserID       string
+	RefreshToken string
+	AccessToken  string
+	IPAddress    string
+	UserAgent    string
+	ExpiresAt    time.Time
+	IsRevoked    bool
+	RevokedAt    *time.Time
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 func NewSession(
-	userID uuid.UUID,
-	refreshTokenHash string,
-	deviceID, deviceName, userAgent, ipAddress string,
+	userID string,
+	refreshToken string,
+	accessToken string,
+	ipAddress string,
+	userAgent string,
 	expiresAt time.Time,
 ) *Session {
 	now := time.Now()
 	return &Session{
-		ID:               uuid.New(),
-		UserID:           userID,
-		RefreshTokenHash: refreshTokenHash,
-		TokenFamily:      uuid.New(),
-		DeviceID:         deviceID,
-		DeviceName:       deviceName,
-		UserAgent:        userAgent,
-		IPAddress:        ipAddress,
-		CreatedAt:        now,
-		LastActivityAt:   now,
-		ExpiresAt:        expiresAt,
-		IsActive:         true,
+		ID:           uuid.New().String(),
+		UserID:       userID,
+		RefreshToken: refreshToken,
+		AccessToken:  accessToken,
+		IPAddress:    ipAddress,
+		UserAgent:    userAgent,
+		ExpiresAt:    expiresAt,
+		IsRevoked:    false,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 }
 
-func (s *Session) UpdateActivity() {
-	s.LastActivityAt = time.Now()
-}
-
-func (s *Session) End(reason string) {
+func (s *Session) Revoke() {
 	now := time.Now()
-	s.IsActive = false
-	s.EndedAt = &now
-	s.EndReason = reason
+	s.IsRevoked = true
+	s.RevokedAt = &now
+	s.UpdatedAt = now
 }
 
 func (s *Session) IsExpired() bool {
@@ -64,5 +55,12 @@ func (s *Session) IsExpired() bool {
 }
 
 func (s *Session) IsValid() bool {
-	return s.IsActive && !s.IsExpired()
+	return !s.IsRevoked && !s.IsExpired()
+}
+
+func (s *Session) UpdateTokens(refreshToken, accessToken string, expiresAt time.Time) {
+	s.RefreshToken = refreshToken
+	s.AccessToken = accessToken
+	s.ExpiresAt = expiresAt
+	s.UpdatedAt = time.Now()
 }

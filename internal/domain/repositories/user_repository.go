@@ -3,18 +3,26 @@ package repositories
 import (
 	"context"
 
-	"authentication/internal/domain/entities"
+	uow "authentication/internal/application/contracts/persistence"
+	"authentication/internal/domain/aggregates"
 	"authentication/internal/domain/valueobjects"
-	uow "authentication/shared/persistence"
-
-	"github.com/google/uuid"
 )
 
 type UserRepository interface {
-	Save(ctx context.Context, tx uow.DB, user *entities.User) error
-	FindByID(ctx context.Context, tx uow.DB, id uuid.UUID) (*entities.User, error)
-	FindByEmail(ctx context.Context, tx uow.DB, email valueobjects.Email) (*entities.User, error)
-	FindByUsername(ctx context.Context, tx uow.DB, username valueobjects.Username) (*entities.User, error)
+	Create(ctx context.Context, tx uow.DB, user *aggregates.UserAggregate) error
+	FindByID(ctx context.Context, tx uow.DB, id string) (*aggregates.UserAggregate, error)
+	FindByEmail(ctx context.Context, tx uow.DB, email valueobjects.Email) (*aggregates.UserAggregate, error)
+	FindByUsername(ctx context.Context, tx uow.DB, username valueobjects.Username) (*aggregates.UserAggregate, error)
+	FindByEmailOrUsername(ctx context.Context, tx uow.DB, identifier string) (*aggregates.UserAggregate, error)
+	Update(ctx context.Context, tx uow.DB, user *aggregates.UserAggregate) error
+	Delete(ctx context.Context, tx uow.DB, id string) error
+	List(
+		ctx context.Context,
+		tx uow.DB,
+		page, pageSize int,
+		role *valueobjects.Role,
+		isActive *bool,
+	) ([]*aggregates.UserAggregate, int64, error)
 	ExistsByEmail(ctx context.Context, tx uow.DB, email valueobjects.Email) (bool, error)
 	ExistsByUsername(ctx context.Context, tx uow.DB, username valueobjects.Username) (bool, error)
 }
