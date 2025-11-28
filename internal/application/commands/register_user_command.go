@@ -1,39 +1,27 @@
 package commands
 
-import (
-	"authentication/internal/domain"
-)
-
 type RegisterUserCommand struct {
-	Email     string
-	Username  string
-	Password  string
-	FirstName string
-	LastName  string
-	Phone     string // optional
+    Username  string
+    Email     string
+    Password  string // Empty for OAuth registrations
+    Phone     string
+    FirstName string
+    LastName  string
+    Role      string
+    IPAddress string
+    UserAgent string
+    
+    // OAuth-specific fields
+    OAuthProvider string // "google", "github", etc.
+    OAuthID       string // External OAuth user ID
+    IsOAuth       bool   // Flag to identify OAuth registration
 }
 
 func (c RegisterUserCommand) CommandName() string {
-	return "RegisterUserCommand"
+    return "RegisterUserCommand"
 }
 
-// NOTE: We don’t do full validation here anymore.
-// Use Value Objects + AuthValidator in the handler.
-func (c RegisterUserCommand) Validate() error {
-	if c.Email == "" {
-		return domain.ErrEmptyEmail
-	}
-	if c.Username == "" {
-		return domain.ErrEmptyUsername
-	}
-	if c.Password == "" {
-		return domain.ErrEmptyPassword
-	}
-	if c.FirstName == "" {
-		return domain.ErrFirstNameRequired
-	}
-	if c.LastName == "" {
-		return domain.ErrLastNameRequired
-	}
-	return nil
+// IsOAuthRegistration checks if this is an OAuth-based registration
+func (c RegisterUserCommand) IsOAuthRegistration() bool {
+    return c.IsOAuth && c.OAuthProvider != "" && c.OAuthID != ""
 }

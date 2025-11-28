@@ -19,7 +19,7 @@ func (s *JSONEventSerializer) Serialize(event events.DomainEvent) ([]byte, error
 		"event_id":     event.EventID().String(),
 		"event_name":   event.EventName(),
 		"occurred_at":  event.OccurredAt().Unix(),
-		"aggregate_id": event.AggregateID().String(),
+		"aggregate_id": event.AggregateID(),
 		"payload":      event.Payload(),
 	}
 	return json.Marshal(data)
@@ -42,7 +42,7 @@ func (s *JSONEventSerializer) Deserialize(data []byte, eventName string) (events
 		ID:          uuid.MustParse(raw.EventID),
 		Name:        raw.EventName,
 		Timestamp:   time.Unix(raw.OccurredAt, 0),
-		AggregateId: uuid.MustParse(raw.AggregateID),
+		AggregateId: raw.AggregateID,
 		Data:        raw.Payload,
 	}, nil
 }

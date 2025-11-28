@@ -72,14 +72,14 @@ func (d *CompositeEventDispatcher) DispatchWithContext(ctx context.Context, even
 	d.tracer.AddAttributes(span,
 		attribute.String("event.name", eventName),
 		attribute.String("event.id", event.EventID().String()),
-		attribute.String("aggregate.id", event.AggregateID().String()),
+		attribute.String("aggregate.id", event.AggregateID()),
 		attribute.Bool("async", d.async),
 	)
 
 	d.logger.Info(ctx, "Dispatching event",
 		zap.String("event_name", eventName),
 		zap.String("event_id", event.EventID().String()),
-		zap.String("aggregate_id", event.AggregateID().String()),
+		zap.String("aggregate_id", event.AggregateID()),
 		zap.Bool("async", d.async),
 	)
 

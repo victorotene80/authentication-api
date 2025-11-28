@@ -18,43 +18,43 @@ const (
 )
 
 type User struct {
-	ID           string
-	Username     valueobjects.Username
-	Email        valueobjects.Email
-	PasswordHash string
-	Phone        valueobjects.PhoneNumber
-	FirstName    string
-	LastName     string
-	Role         valueobjects.Role
-	IsActive     bool
-	IsVerified   bool
-	LastLoginAt  *time.Time
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID          string
+	Username    valueobjects.Username
+	Email       valueobjects.Email
+	Password    valueobjects.Password
+	Phone       valueobjects.PhoneNumber
+	FirstName   string
+	LastName    string
+	Role        valueobjects.Role
+	IsActive    bool
+	IsVerified  bool
+	LastLoginAt *time.Time
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 func NewUser(
 	username valueobjects.Username,
 	email valueobjects.Email,
-	passwordHash string,
+	password valueobjects.Password,
 	phone valueobjects.PhoneNumber,
 	firstName, lastName string,
 	role valueobjects.Role,
 ) *User {
 	now := time.Now()
 	return &User{
-		ID:           uuid.New().String(),
-		Username:     username,
-		Email:        email,
-		PasswordHash: passwordHash,
-		Phone:        phone,
-		FirstName:    firstName,
-		LastName:     lastName,
-		Role:         role,
-		IsActive:     true,
-		IsVerified:   false,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:         uuid.New().String(),
+		Username:   username,
+		Email:      email,
+		Password:   password,
+		Phone:      phone,
+		FirstName:  firstName,
+		LastName:   lastName,
+		Role:       role,
+		IsActive:   true,
+		IsVerified: false,
+		CreatedAt:  now,
+		UpdatedAt:  now,
 	}
 }
 
@@ -73,10 +73,11 @@ func (u *User) VerifyEmail() {
 	u.UpdatedAt = time.Now()
 }
 
-func (u *User) UpdatePassword(passwordHash string) {
-	u.PasswordHash = passwordHash
-	u.UpdatedAt = time.Now()
+func (u *User) UpdatePassword(password valueobjects.Password) {
+    u.Password = password
+    u.UpdatedAt = time.Now()
 }
+
 
 func (u *User) UpdateProfile(firstName, lastName string, phone valueobjects.PhoneNumber) {
 	u.FirstName = firstName
