@@ -1,39 +1,32 @@
 package request
 
 import (
-	"fmt"
+	"authentication/internal/application/commands"
 
 	"github.com/go-playground/validator/v10"
-
-	"authentication/internal/application/commands"
 )
 
 type OAuthRegistrationRequest struct {
+	IDToken       string `json:"id_token" validate:"required"`
 	OAuthProvider string `json:"oauth_provider" validate:"required,oneof=google github facebook apple"`
-	OAuthID       string `json:"oauth_id" validate:"required"`
-	Email         string `json:"email" validate:"required,email"`
+
+	//OAuthProvider string `json:"oauth_provider" validate:"required,oneof=google github facebook apple"`
+	//OAuthID       string `json:"oauth_id" validate:"required"`
+	//Email         string `json:"email" validate:"required,email"`
 }
 
 func (r *OAuthRegistrationRequest) Validate(v *validator.Validate) error {
-	if v == nil {
-		return fmt.Errorf("validator is nil")
-	}
 	return v.Struct(r)
 }
 
-func (r *OAuthRegistrationRequest) ToCommand(ipAddress, userAgent string) commands.RegisterUserCommand {
+func (r *OAuthRegistrationRequest) ToCommand(ip, ua string) commands.RegisterUserCommand {
 	return commands.RegisterUserCommand{
-		Username:      "",  
-		Email:         r.Email,
-		Password:      "", 
-		Phone:         "",
-		FirstName:     "",
-		LastName:      "",
-		Role:          "user",
-		IPAddress:     ipAddress,
-		UserAgent:     userAgent,
-		OAuthProvider: r.OAuthProvider,
-		OAuthID:       r.OAuthID,
+		OAuthProvider: "google",
+		IDToken:       r.IDToken,
+		AccessToken:   "", // not needed now, keep empty
+		IPAddress:     ip,
+		UserAgent:     ua,
 		IsOAuth:       true,
+		Role:          "user", // default
 	}
 }

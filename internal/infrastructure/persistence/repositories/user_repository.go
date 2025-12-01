@@ -1,4 +1,3 @@
-// internal/infrastructure/persistence/repositories/user_repository.go
 package repositories
 
 import (

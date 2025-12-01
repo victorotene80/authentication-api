@@ -8,27 +8,24 @@ import (
 
 	uow "authentication/internal/application/contracts/persistence"
 	"authentication/internal/infrastructure/observability/metrics"
-
+	"authentication/shared/tracing"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
-
-// instrumentedUnitOfWork wraps unitOfWork with observability
 type instrumentedUnitOfWork struct {
 	*unitOfWork
 	logger  *zap.Logger
-	tracer  trace.Tracer
+	tracer  tracing.Tracer
 	metrics *metrics.MetricsRecorder
 }
 
-// NewInstrumentedUnitOfWork creates a new instrumented UnitOfWork with logger, tracer, and metrics
 func NewInstrumentedUnitOfWork(
 	db *sql.DB,
 	logger *zap.Logger,
-	tracer trace.Tracer,
+	tracer tracing.Tracer,
 	metricsRecorder *metrics.MetricsRecorder,
 ) uow.UnitOfWork {
 	return &instrumentedUnitOfWork{
@@ -38,11 +35,10 @@ func NewInstrumentedUnitOfWork(
 		metrics:    metricsRecorder,
 	}
 }
-// --- Instrumented implementation ---
 
 func (u *instrumentedUnitOfWork) Begin(ctx context.Context) error {
 	start := time.Now()
-	ctx, span := u.tracer.Start(ctx, "uow.Begin",
+	ctx, span := u.tracer.StartSpan(ctx, "uow.Begin",
 		trace.WithSpanKind(trace.SpanKindInternal),
 		trace.WithAttributes(attribute.String("db.operation", "begin_transaction")),
 	)
@@ -55,7 +51,11 @@ func (u *instrumentedUnitOfWork) Begin(ctx context.Context) error {
 	if err != nil {
 		u.logger.Error("failed to begin transaction", zap.Error(err), zap.Duration("duration", duration))
 		span.RecordError(err)
-		span.SetStatus(codes.Error, "failed to begin transaction")
+		u.tracer.AddAttributes(span,
+			attribute.String("error.type", fmt.Sprintf("%T", err)),
+			attribute.String("error.message", err.Error()),
+		)
+		//span.SetStatus(codes.Error, "failed to begin transaction")
 	} else {
 		u.logger.Debug("transaction started successfully", zap.Duration("duration", duration))
 		span.SetStatus(codes.Ok, "success")
@@ -71,7 +71,7 @@ func (u *instrumentedUnitOfWork) Begin(ctx context.Context) error {
 
 func (u *instrumentedUnitOfWork) Commit(ctx context.Context) error {
 	start := time.Now()
-	ctx, span := u.tracer.Start(ctx, "uow.Commit",
+	ctx, span := u.tracer.StartSpan(ctx, "uow.Commit",
 		trace.WithSpanKind(trace.SpanKindInternal),
 		trace.WithAttributes(attribute.String("db.operation", "commit_transaction")),
 	)
@@ -100,7 +100,7 @@ func (u *instrumentedUnitOfWork) Commit(ctx context.Context) error {
 
 func (u *instrumentedUnitOfWork) Rollback(ctx context.Context) error {
 	start := time.Now()
-	ctx, span := u.tracer.Start(ctx, "uow.Rollback",
+	ctx, span := u.tracer.StartSpan(ctx, "uow.Rollback",
 		trace.WithSpanKind(trace.SpanKindInternal),
 		trace.WithAttributes(attribute.String("db.operation", "rollback_transaction")),
 	)
@@ -129,7 +129,7 @@ func (u *instrumentedUnitOfWork) Rollback(ctx context.Context) error {
 
 func (u *instrumentedUnitOfWork) Execute(ctx context.Context, fn func(ctx context.Context, tx *sql.Tx) error) (err error) {
 	start := time.Now()
-	ctx, span := u.tracer.Start(ctx, "uow.Execute",
+	ctx, span := u.tracer.StartSpan(ctx, "uow.Execute",
 		trace.WithSpanKind(trace.SpanKindInternal),
 		trace.WithAttributes(attribute.String("db.operation", "transaction")),
 	)
@@ -167,7 +167,6 @@ func (u *instrumentedUnitOfWork) Execute(ctx context.Context, fn func(ctx contex
 		)
 	}()
 
-	// Execute the user function
 	err = fn(ctx, u.unitOfWork.tx)
 	if err != nil {
 		span.RecordError(err)

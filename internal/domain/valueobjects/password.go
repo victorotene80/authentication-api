@@ -8,6 +8,10 @@ func NewPassword(hashed string) Password {
 	return Password{value: hashed}
 }
 
+func EmptyPassword() Password {
+	return Password{value: ""}
+}
+
 func (p Password) Value() string {
 	return p.value
 }

@@ -18,34 +18,63 @@ type UserAggregate struct {
 	Sessions []*entities.Session
 }
 
-func NewUserAggregate(
-	username valueobjects.Username,
-	email valueobjects.Email,
-	password valueobjects.Password,
-	phone valueobjects.PhoneNumber,
-	firstName, lastName string,
-	role valueobjects.Role,
+func NewEmailUserAggregate(
+    username valueobjects.Username,
+    email valueobjects.Email,
+    password valueobjects.Password,
+    //phone valueobjects.PhoneNumber,
+    firstName, lastName string,
+    role valueobjects.Role,
 ) *UserAggregate {
 
-	id := uuid.New().String()
-	user := entities.NewUser(username, email, password, phone, firstName, lastName, role)
-	user.ID = id
+    id := uuid.New().String()
+    user := entities.NewUser(username, email, password, firstName, lastName, role, false, "")
+    user.ID = id
 
-	aggregate := &UserAggregate{
-		AggregateRoot: NewAggregateRoot(id),
-		User:          user,
-		Sessions:      make([]*entities.Session, 0),
-	}
+    agg := &UserAggregate{
+        AggregateRoot: NewAggregateRoot(id),
+        User:          user,
+        Sessions:      []*entities.Session{},
+    }
 
-	aggregate.AddEvent(events.NewUserCreatedEvent(
-		id,
-		username.String(),
-		email.String(),
-		role.String(),
-	))
+    agg.AddEvent(events.NewUserCreatedEvent(
+        id, username.String(), email.String(), role.String(),
+    ))
 
-	return aggregate
+    return agg
 }
+
+func NewOAuthUserAggregate(
+    email valueobjects.Email,
+	firstName, lastName string,
+    oauthProvider string,
+    role valueobjects.Role,
+) *UserAggregate {
+
+    id := uuid.New().String()
+
+	emptyUsername := valueobjects.EmptyUsername()
+    emptyPassword := valueobjects.EmptyPassword()
+
+    user := entities.NewUser(emptyUsername, email, emptyPassword, firstName, lastName, role, true, oauthProvider)
+    user.ID = id
+    user.VerifyEmail()
+
+    agg := &UserAggregate{
+        AggregateRoot: NewAggregateRoot(id),
+        User:          user,
+        Sessions:      []*entities.Session{},
+    }
+
+    agg.AddEvent(events.NewUserCreatedEvent(
+        id, "", email.String(), role.String(),
+    ))
+
+    return agg
+}
+
+
+
 
 func (u *UserAggregate) ChangePassword(
 	oldPlainPassword string,

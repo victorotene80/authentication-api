@@ -1,42 +1,33 @@
 package request
 
 import (
-	"fmt"
+	"authentication/internal/application/commands"
 
 	"github.com/go-playground/validator/v10"
-
-	"authentication/internal/application/commands"
 )
 
 type EmailRegistrationRequest struct {
+	FirstName string `json:"first_name" validate:"required,min=2,max=100"`
+	LastName  string `json:"last_name" validate:"required,min=2,max=100"`
+	Username  string `json:"username" validate:"omitempty,min=3,max=50,alphanum"`
 	Email     string `json:"email" validate:"required,email"`
-	Password  string `json:"password" validate:"required,min=12,max=128"`
-	Phone     string `json:"phone" validate:"required,e164"`
-	FirstName string `json:"first_name" validate:"required,min=1,max=100"`
-	LastName  string `json:"last_name" validate:"required,min=1,max=100"`
-	Username  string `json:"username" validate:"required,min=3,max=50,alphanum"`
+	Password  string `json:"password" validate:"required,min=8,max=200"`
 }
 
 func (r *EmailRegistrationRequest) Validate(v *validator.Validate) error {
-	if v == nil {
-		return fmt.Errorf("validator is nil")
-	}
 	return v.Struct(r)
 }
 
-func (r *EmailRegistrationRequest) ToCommand(ipAddress, userAgent string) commands.RegisterUserCommand {
+func (r *EmailRegistrationRequest) ToCommand(ip, ua string) commands.RegisterUserCommand {
 	return commands.RegisterUserCommand{
-		Username:      r.Username,
-		Email:         r.Email,
-		Password:      r.Password,
-		Phone:         r.Phone,
-		FirstName:     r.FirstName,
-		LastName:      r.LastName,
-		Role:          "user",
-		IPAddress:     ipAddress,
-		UserAgent:     userAgent,
-		OAuthProvider: "",
-		OAuthID:       "",
-		IsOAuth:       false,
+		Email:     r.Email,
+		Password:  r.Password,
+		FirstName: r.FirstName,
+		LastName:  r.LastName,
+		Username:  r.Username,
+		IPAddress: ip,
+		UserAgent: ua,
+		IsOAuth:   false,
+		Role:      "user",
 	}
 }

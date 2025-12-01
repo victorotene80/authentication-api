@@ -12,6 +12,9 @@ type Username struct {
 
 func NewUsername(username string) (Username, error) {
 	username = strings.TrimSpace(username)
+	/*if username == "" {
+		return Username{}, domain.ErrEmptyUsername
+	}*/
 	if username == "" {
 		return Username{}, domain.ErrEmptyUsername
 	}
@@ -34,6 +37,10 @@ func NewUsername(username string) (Username, error) {
 
 func (u Username) String() string {
 	return u.value
+}
+
+func EmptyUsername() Username {
+	return Username{value: ""}
 }
 
 func (u Username) IsEmpty() bool {
