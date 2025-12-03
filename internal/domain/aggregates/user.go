@@ -73,9 +73,6 @@ func NewOAuthUserAggregate(
     return agg
 }
 
-
-
-
 func (u *UserAggregate) ChangePassword(
 	oldPlainPassword string,
 	newPlainPassword string,

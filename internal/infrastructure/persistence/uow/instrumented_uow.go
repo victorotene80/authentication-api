@@ -127,7 +127,7 @@ func (u *instrumentedUnitOfWork) Rollback(ctx context.Context) error {
 	return err
 }
 
-func (u *instrumentedUnitOfWork) Execute(ctx context.Context, fn func(ctx context.Context, tx *sql.Tx) error) (err error) {
+func (u *instrumentedUnitOfWork) Execute(ctx context.Context, fn func(ctx context.Context) error) (err error) {
 	start := time.Now()
 	ctx, span := u.tracer.StartSpan(ctx, "uow.Execute",
 		trace.WithSpanKind(trace.SpanKindInternal),
@@ -167,7 +167,7 @@ func (u *instrumentedUnitOfWork) Execute(ctx context.Context, fn func(ctx contex
 		)
 	}()
 
-	err = fn(ctx, u.unitOfWork.tx)
+	err = fn(ctx)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "execution failed")

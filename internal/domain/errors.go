@@ -29,4 +29,30 @@ var (
 	ErrSessionExpired                = errors.New("session expired")
 	ErrCannonotLogoutInactiveSession = errors.New("cannot logout an inactive session")
 	ErrCannonotRevokeInactiveSession = errors.New("cannot revoke an inactive session")
+
+	ErrUserNotFound         = errors.New("user not found")
+	ErrUsernameAlreadyInUse = errors.New("username already in use")
+	ErrInvalidEmail         = errors.New("invalid email format")
+	ErrInvalidUsername      = errors.New("invalid username format")
+	ErrInvalidPassword      = errors.New("invalid password format")
+	ErrInvalidRole          = errors.New("invalid role")
+	ErrInvalidPhone         = errors.New("invalid phone number")
+	// Authentication errors
+	ErrInvalidCredentials = errors.New("invalid credentials")
+	ErrPasswordMismatch   = errors.New("password does not match")
+	ErrSessionNotFound    = errors.New("session not found")
+	ErrSessionRevoked     = errors.New("session revoked")
+
+	// OAuth errors
+	ErrOAuthVerificationFailed   = errors.New("oauth verification failed")
+	ErrOAuthEmailNotVerified     = errors.New("oauth email not verified")
+	ErrOAuthProviderNotSupported = errors.New("oauth provider not supported")
+	
+	// Authentication errors
+	ErrInvalidToken         = errors.New("invalid token")
+	ErrTokenExpired         = errors.New("token expired")
+	
+	// OAuth errors
+	ErrOAuthProviderMismatch     = errors.New("email registered with different oauth provider")
+
 )

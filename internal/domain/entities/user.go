@@ -31,8 +31,8 @@ type User struct {
 	LastLoginAt   *time.Time
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
-	oauthOnly     bool
-	oauthProvider string
+	OAuthOnly     bool
+	OAuthProvider string
 }
 
 func NewUser(
@@ -59,8 +59,8 @@ func NewUser(
 		IsVerified: false,
 		CreatedAt:  now,
 		UpdatedAt:  now,
-		oauthOnly:  oauthOnly,
-		oauthProvider: oauthProvider,
+		OAuthOnly:  oauthOnly,
+		OAuthProvider: oauthProvider,
 	}
 }
 
@@ -95,6 +95,14 @@ func (u *User) RecordLogin() {
 	now := time.Now()
 	u.LastLoginAt = &now
 	u.UpdatedAt = now
+}
+
+func (u *User) IsOAuthUser() bool {
+    return u.OAuthOnly
+}
+
+func (u *User) Provider() string{
+	return u.OAuthProvider
 }
 
 /*

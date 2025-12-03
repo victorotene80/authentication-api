@@ -80,7 +80,7 @@ func (u *unitOfWork) GetTx() *sql.Tx {
 // Execute runs a function within a transaction with automatic commit/rollback
 func (u *unitOfWork) Execute(
 	ctx context.Context,
-	fn func(ctx context.Context, tx *sql.Tx) error,
+	fn func(ctx context.Context) error,
 ) (err error) {
 	// Begin transaction
 	if err := u.Begin(ctx); err != nil {
@@ -102,11 +102,18 @@ func (u *unitOfWork) Execute(
 	}()
 
 	// Execute function
-	err = fn(ctx, u.tx)
+	err = fn(ctx)
 	if err != nil {
 		return err
 	}
 
 	// Commit transaction
 	return u.Commit(ctx)
+}
+
+func (u *unitOfWork) Con() uow.DB {
+    if u.tx != nil {
+        return u.tx
+    }
+    return u.db
 }

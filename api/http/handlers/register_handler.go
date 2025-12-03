@@ -7,11 +7,14 @@ import (
 	"authentication/api/http/dtos"
 	"authentication/api/http/dtos/auth/request"
 	"authentication/api/http/dtos/auth/response"
+	"authentication/internal/domain"
+	"context"
 
 	//"authentication/internal/application/commands"
 	"authentication/internal/application/contracts/messaging"
 	"authentication/shared/logging"
 	"authentication/shared/utils"
+	"errors"
 
 	"github.com/go-playground/validator/v10"
 	"go.uber.org/zap"
@@ -67,15 +70,10 @@ func (h *AuthHandler) RegisterEmail(w http.ResponseWriter, r *http.Request) {
 			zap.Error(err),
 		)
 
-		return
-	}
-
-	/*if err := h.commandBus.Execute(ctx, cmd); err != nil {
-		h.logger.Error(ctx, "Email registration failed", zap.Error(err))
 		statusCode, message := h.mapErrorToHTTP(err)
 		h.respondError(w, statusCode, message)
 		return
-	}*/
+	}
 
 	resp := response.RegisterUserResponse{
 		//Username:  req.Username,
@@ -130,12 +128,11 @@ func (h *AuthHandler) RegisterOAuth(w http.ResponseWriter, r *http.Request) {
 			zap.Error(err),
 		)
 
-		//statusCode, message := h.mapErrorToHTTP(err)
-		//h.respondError(w, statusCode, message)
+		statusCode, message := h.mapErrorToHTTP(err)
+		h.respondError(w, statusCode, message)
 		return
 	}
 
-	//come back to this later
 	resp := response.RegisterUserResponse{}
 
 	h.respondSuccess(w, http.StatusCreated, "Registration and login successful", resp)
@@ -160,4 +157,25 @@ func (h *AuthHandler) respondError(w http.ResponseWriter, statusCode int, messag
 		Message: message,
 		Data:    nil,
 	})
+}
+
+func (h *AuthHandler) mapErrorToHTTP(err error) (int, string) {
+	switch {
+	case errors.Is(err, domain.ErrEmailAlreadyInUse):
+		return http.StatusConflict, "Email is already registered"
+	case errors.Is(err, domain.ErrInvalidEmail):
+		return http.StatusBadRequest, "Invalid email format"
+	case errors.Is(err, domain.ErrInvalidUsernameFormat):
+		return http.StatusBadRequest, "Invalid username format"
+	case errors.Is(err, domain.ErrInvalidPassword):
+		return http.StatusBadRequest, "Invalid password format"
+	case errors.Is(err, domain.ErrInvalidRole):
+		return http.StatusBadRequest, "Invalid role"
+	case errors.Is(err, domain.ErrUserNotFound):
+		return http.StatusNotFound, "User not found"
+	default:
+		// Log unexpected errors
+		h.logger.Error(context.Background(), "Unexpected error", zap.Error(err))
+		return http.StatusInternalServerError, "An unexpected error occurred"
+	}
 }

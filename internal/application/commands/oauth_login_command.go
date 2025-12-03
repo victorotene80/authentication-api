@@ -1,13 +1,13 @@
 package commands
 
-type LoginWithOAuthCommand struct {
-    OAuthProvider string
-    OAuthID       string
-    Email         string 
-    IPAddress     string
-    UserAgent     string
+type LoginOAuthUserCommand struct {
+	OAuthProvider string
+	IDToken       string
+	AccessToken   string
+	IPAddress     string
+	UserAgent     string
 }
 
-func (c LoginWithOAuthCommand) CommandName() string {
-    return "LoginWithOAuthCommand"
+func (c LoginOAuthUserCommand) CommandName() string {
+	return "LoginOAuthUser"
 }

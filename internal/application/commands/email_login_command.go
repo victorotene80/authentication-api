@@ -1,12 +1,12 @@
 package commands
 
-type LoginWithEmailCommand struct {
+type LoginEmailUserCommand struct {
     Email     string
     Password  string
     IPAddress string
     UserAgent string
 }
 
-func (c LoginWithEmailCommand) CommandName() string {
+func (c LoginEmailUserCommand) CommandName() string {
     return "LoginWithEmailCommand"
 }
