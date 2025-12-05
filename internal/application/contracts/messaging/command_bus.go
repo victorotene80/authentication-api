@@ -63,33 +63,6 @@ func (m typedMiddlewareAdapter[C, R]) ExecuteUntyped(
 	return m.inner.Execute(ctx, cmd.(C), handler)
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 /*type Command interface {
 	CommandName() string
 }
