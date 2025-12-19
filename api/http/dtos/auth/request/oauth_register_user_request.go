@@ -19,14 +19,14 @@ func (r *OAuthRegistrationRequest) Validate(v *validator.Validate) error {
 	return v.Struct(r)
 }
 
-func (r *OAuthRegistrationRequest) ToCommand(ip, ua string) commands.RegisterUserCommand {
-	return commands.RegisterUserCommand{
+func (r *OAuthRegistrationRequest) ToCommand(ip, ua string) commands.RegisterOAuthUserCommand {
+	return commands.RegisterOAuthUserCommand{
 		OAuthProvider: "google",
 		IDToken:       r.IDToken,
-		AccessToken:   "", // not needed now, keep empty
+		AccessToken:   "", 
 		IPAddress:     ip,
 		UserAgent:     ua,
-		IsOAuth:       true,
-		Role:          "user", // default
+		//IsOAuth:       true,
+		Role:          "user", 
 	}
 }

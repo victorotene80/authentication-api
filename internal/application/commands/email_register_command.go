@@ -9,6 +9,7 @@ type RegisterEmailUserCommand struct {
 	Role      string
 	IPAddress string
 	UserAgent string
+	DeviceID  string
 }
 
 func (c RegisterEmailUserCommand) CommandName() string {

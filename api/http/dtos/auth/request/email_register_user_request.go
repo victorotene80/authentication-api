@@ -18,8 +18,8 @@ func (r *EmailRegistrationRequest) Validate(v *validator.Validate) error {
 	return v.Struct(r)
 }
 
-func (r *EmailRegistrationRequest) ToCommand(ip, ua string) commands.RegisterUserCommand {
-	return commands.RegisterUserCommand{
+func (r *EmailRegistrationRequest) ToCommand(ip, ua string) commands.RegisterEmailUserCommand {
+	return commands.RegisterEmailUserCommand{
 		Email:     r.Email,
 		Password:  r.Password,
 		FirstName: r.FirstName,
@@ -27,7 +27,7 @@ func (r *EmailRegistrationRequest) ToCommand(ip, ua string) commands.RegisterUse
 		Username:  r.Username,
 		IPAddress: ip,
 		UserAgent: ua,
-		IsOAuth:   false,
+		//IsOAuth:   false,
 		Role:      "user",
 	}
 }

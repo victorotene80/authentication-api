@@ -7,142 +7,125 @@ import (
 	"authentication/internal/application/commands"
 	"authentication/internal/application/contracts/messaging"
 	"authentication/internal/application/contracts/persistence"
-	oauthService "authentication/internal/application/contracts/services"
+	"authentication/internal/application/contracts/services"
+	"authentication/internal/application/dtos"
 	"authentication/internal/domain"
 	"authentication/internal/domain/aggregates"
 	"authentication/internal/domain/repositories"
 	"authentication/internal/domain/valueobjects"
+	"authentication/internal/domain/events"
 	"authentication/shared/logging"
-	"authentication/shared/tracing"
 
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
 type RegisterOAuthUserHandler struct {
-	userRepo      repositories.UserRepository
-	auditRepo     repositories.AuditRepository
-	uow           persistence.UnitOfWork
-	//outboxService *OutboxService
-	oauthService  oauthService.OAuthService
-	logger        logging.Logger
-	tracer        tracing.Tracer
+	userRepo     repositories.UserRepository
+	auditRepo    repositories.AuditRepository
+	outboxRepo   persistence.OutboxRepository
+	uow          persistence.UnitOfWork
+	oauthService services.OAuthService
+	tokenService services.TokenService
+	logger       logging.Logger
 }
 
 func NewRegisterOAuthUserHandler(
 	userRepo repositories.UserRepository,
 	auditRepo repositories.AuditRepository,
+	outboxRepo persistence.OutboxRepository,
 	uow persistence.UnitOfWork,
-	//outboxService *OutboxService,
-	oauthService oauthService.OAuthService,
+	oauthService services.OAuthService,
+	tokenService services.TokenService,
 	logger logging.Logger,
-	tracer tracing.Tracer,
-) messaging.CommandHandler {
+) messaging.CommandHandler[commands.RegisterOAuthUserCommand, dtos.RegisterOAuthUserResult] {
 	return &RegisterOAuthUserHandler{
-		userRepo:      userRepo,
-		auditRepo:     auditRepo,
-		uow:           uow,
-		//outboxService: outboxService,
-		oauthService:  oauthService,
-		logger:        logger.With(zap.String("handler", "register_oauth_user")),
-		tracer:        tracer,
+		userRepo:     userRepo,
+		auditRepo:    auditRepo,
+		outboxRepo:   outboxRepo,
+		uow:          uow,
+		oauthService: oauthService,
+		tokenService: tokenService,
+		logger:       logger.With(zap.String("handler", "register_oauth_user")),
 	}
 }
 
-func (h *RegisterOAuthUserHandler) Handle(ctx context.Context, cmd messaging.Command) error {
-	ctx, span := h.tracer.StartSpan(ctx, "RegisterOAuthUserHandler.Handle",
-		trace.WithSpanKind(trace.SpanKindInternal),
-	)
-	defer span.End()
-
-	registerCmd, ok := cmd.(commands.RegisterOAuthUserCommand)
-	if !ok {
-		err := fmt.Errorf("invalid command type: expected RegisterOAuthUserCommand, got %T", cmd)
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "invalid command type")
-		return err
-	}
-
-	h.logger.Info(ctx, "Processing OAuth user registration",
-		zap.String("provider", registerCmd.OAuthProvider),
-	)
-
+func (r *RegisterOAuthUserHandler) Handle(
+	ctx context.Context,
+	cmd commands.RegisterOAuthUserCommand,
+) (dtos.RegisterOAuthUserResult, error) {
 	defer func() {
-		if r := recover(); r != nil {
-			recErr := fmt.Errorf("panic: %v", r)
-			h.logger.Error(ctx, "Panic during OAuth user registration",
-				zap.Any("panic", r),
-				zap.String("provider", registerCmd.OAuthProvider),
+		if h := recover(); h != nil {
+			r.logger.Error(ctx, "Panic during OAuth user registration",
+				zap.Any("panic", h),
+				zap.String("email", cmd.Email),
 			)
-			h.logFailedRegistration(ctx, registerCmd, recErr)
-			panic(r) // Re-panic after logging
+
+			_ = r.publishFailedUserCreatedEvent(ctx, cmd, fmt.Errorf("panic: %v", h))
+			panic(h)
 		}
 	}()
 
 	var user *aggregates.UserAggregate
 	var isNewUser bool
 
-	err := h.uow.Execute(ctx, func(ctx context.Context) error {
+	err := r.uow.Execute(ctx, func(ctx context.Context) error {
 		var err error
-		user, isNewUser, err = h.registerOAuthUser(ctx, registerCmd)
-		if err != nil {
-			return err
-		}
-
-		// Only store events for new users
-		if isNewUser {
-			//return h.outboxService.StoreEvents(ctx, user.GetEvents())
-		}
-		return nil
+		user, isNewUser, err = r.registerOAuthUser(ctx, cmd)
+		return err
 	})
 
 	if err != nil {
-		h.logger.Error(ctx, "Failed to register OAuth user",
-			zap.Error(err),
-			zap.String("provider", registerCmd.OAuthProvider),
-		)
-		h.logFailedRegistration(ctx, registerCmd, err)
-		span.RecordError(err)
-		span.SetAttributes(attribute.String("registration.status", "failed"))
-		return err
+		_ = r.publishFailedUserCreatedEvent(ctx, cmd, err)
+		return dtos.RegisterOAuthUserResult{}, err
+	}
+
+	// Generate tokens for OAuth users
+	metadata := services.SessionMetadata{
+		IPAddress: cmd.IPAddress,
+		UserAgent: cmd.UserAgent,
+		DeviceID:  cmd.DeviceID,
+	}
+
+	tokenPair, err := r.tokenService.Generate(
+		ctx,
+		user.ID(),
+		cmd.Role,
+		user.User.Email.String(),
+		metadata,
+	)
+	if err != nil {
+		return dtos.RegisterOAuthUserResult{}, fmt.Errorf("failed to generate tokens: %w", err)
 	}
 
 	if isNewUser {
-		h.logSuccessfulRegistration(ctx, user, registerCmd)
-		h.logger.Info(ctx, "New OAuth user registered successfully",
-			zap.String("user_id", user.ID()),
-			zap.String("provider", registerCmd.OAuthProvider),
-		)
-	} else {
-		h.logger.Info(ctx, "Existing OAuth user returned (idempotent)",
-			zap.String("user_id", user.ID()),
-			zap.String("provider", registerCmd.OAuthProvider),
-		)
+		_ = r.publishSuccessUserCreatedEvent(ctx, user, cmd)
 	}
 
-	span.SetAttributes(
-		attribute.String("user.id", user.ID()),
-		attribute.String("registration.type", "oauth"),
-		attribute.Bool("is_new_user", isNewUser),
-	)
-	span.SetStatus(codes.Ok, "success")
+	result := dtos.RegisterOAuthUserResult{
+		UserID:          user.ID(),
+		Email:           user.User.Email.String(),
+		Username:        "",
+		FirstName:       user.User.FirstName,
+		LastName:        user.User.LastName,
+		Role:            cmd.Role,
+		IsOAuthUser:     true,
+		OAuthProvider:   cmd.OAuthProvider,
+		RequiresOnboard: isNewUser,
+		IsNewUser:       isNewUser,
+		AccessToken:     tokenPair.AccessToken,
+		RefreshToken:    tokenPair.RefreshToken,
+		ExpiresAt:       tokenPair.ExpiresAt.Format("2006-01-02T15:04:05Z07:00"),
+		ExpiresIn:       tokenPair.ExpiresIn,
+		SessionID:       tokenPair.SessionID,
+	}
 
-	return nil
+	return result, nil
 }
 
 func (h *RegisterOAuthUserHandler) registerOAuthUser(
 	ctx context.Context,
 	cmd commands.RegisterOAuthUserCommand,
 ) (*aggregates.UserAggregate, bool, error) {
-	ctx, span := h.tracer.StartSpan(ctx, "RegisterOAuthUserHandler.registerOAuthUser")
-	defer span.End()
-
-	span.SetAttributes(
-		attribute.String("oauth.provider", cmd.OAuthProvider),
-	)
-
 	info, err := h.oauthService.Verify(
 		ctx,
 		cmd.OAuthProvider,
@@ -150,7 +133,6 @@ func (h *RegisterOAuthUserHandler) registerOAuthUser(
 		cmd.AccessToken,
 	)
 	if err != nil {
-		span.RecordError(err)
 		return nil, false, fmt.Errorf("oauth verification failed: %w", err)
 	}
 
@@ -168,21 +150,17 @@ func (h *RegisterOAuthUserHandler) registerOAuthUser(
 		return nil, false, fmt.Errorf("failed to check email existence: %w", err)
 	}
 
-	if existingUser != nil {
+	/*if existingUser != nil {
 		if existingUser.User.IsOAuthUser() && existingUser.User.Provider() == cmd.OAuthProvider {
-			h.logger.Info(ctx, "OAuth user already exists, returning existing user",
-				zap.String("email", info.Email),
-				zap.String("provider", cmd.OAuthProvider),
-			)
-			return existingUser, false, nil // false = not a new user
+			return existingUser, false, nil
 		}
-
-		//if user already exists login 
-		// User registered via email or different OAuth provider
 		return nil, false, domain.ErrEmailAlreadyInUse
+	}*/
+
+	if existingUser != nil{
+		return existingUser, false, nil
 	}
 
-	// User doesn't exist - create new one
 	role, err := valueobjects.NewRole(cmd.Role)
 	if err != nil {
 		return nil, false, fmt.Errorf("invalid role: %w", err)
@@ -200,51 +178,75 @@ func (h *RegisterOAuthUserHandler) registerOAuthUser(
 		return nil, false, fmt.Errorf("failed to create user: %w", err)
 	}
 
-	span.SetAttributes(
-		attribute.String("user.id", user.ID()),
-		attribute.String("registration.type", "oauth"),
-	)
-
-	return user, true, nil // true = new user created
+	return user, true, nil
 }
 
-func (h *RegisterOAuthUserHandler) logSuccessfulRegistration(
+func (r *RegisterOAuthUserHandler) publishSuccessUserCreatedEvent(
 	ctx context.Context,
 	user *aggregates.UserAggregate,
 	cmd commands.RegisterOAuthUserCommand,
-) {
-	_ = h.auditRepo.Create(ctx, &aggregates.AuditLog{
-		UserID:       user.User.ID,
-		ResourceID:   user.User.ID,
-		ResourceType: "user",
-		Action:       valueobjects.AuditActionUserRegistered,
-		Status:       "SUCCESS",
-		IPAddress:    cmd.IPAddress,
-		UserAgent:    cmd.UserAgent,
-		Metadata: map[string]any{
-			"type":           "oauth",
-			"oauth_provider": cmd.OAuthProvider,
-			"email":          user.User.Email.String(),
-			"role":           cmd.Role,
-		},
-	})
+) error {
+	event := events.NewUserCreatedEvent(
+		user.ID(),
+		"nil",//user.User.Username.String(),
+		user.User.Email.String(),
+		user.User.Role.String(),
+		user.User.FirstName,
+		user.User.LastName,
+		cmd.IPAddress,
+		cmd.UserAgent,
+		"SUCCESS",
+		"oauth",
+	)
+
+	outboxMsg := &persistence.OutboxMessage{
+		ID:          event.EventID().String(),
+		EventType:   event.EventName(),
+		AggregateID: event.AggregateID(),
+		Payload:     event.Payload(),
+		Metadata:    event.Metadata(),
+		OccurredAt:  event.OccurredAt().Unix(),
+	}
+
+	if err := r.outboxRepo.Save(ctx, outboxMsg); err != nil {
+		return fmt.Errorf("failed to save outbox event: %w", err)
+	}
+
+	return nil
 }
 
-func (h *RegisterOAuthUserHandler) logFailedRegistration(
+func (r *RegisterOAuthUserHandler) publishFailedUserCreatedEvent(
 	ctx context.Context,
 	cmd commands.RegisterOAuthUserCommand,
-	err error,
-) {
-	_ = h.auditRepo.Create(ctx, &aggregates.AuditLog{
-		Action:       valueobjects.AuditActionUserRegistered,
-		Status:       "FAILURE",
-		ResourceType: "user",
-		ErrorMessage: err.Error(),
-		IPAddress:    cmd.IPAddress,
-		UserAgent:    cmd.UserAgent,
-		Metadata: map[string]any{
-			"type":           "oauth",
-			"oauth_provider": cmd.OAuthProvider,
-		},
-	})
+	cause error,
+) error{
+	event := events.NewUserCreatedEvent(
+		"nil",
+		"nil",
+		cmd.Email,
+		cmd.Role,
+		"nil",
+		"nil",
+		cmd.IPAddress,
+		cmd.UserAgent,
+		"FAILURE",
+		"email",
+	)
+	meta := event.Metadata()
+	meta["error"] = cause.Error()
+
+	outboxMsg := &persistence.OutboxMessage{
+		ID:          event.EventID().String(),
+		EventType:   event.EventName(),
+		AggregateID: event.AggregateID(),
+		Payload:     event.Payload(),
+		Metadata:    event.Metadata(),
+		OccurredAt:  event.OccurredAt().Unix(),
+	}
+
+	if err := r.outboxRepo.Save(ctx, outboxMsg); err != nil {
+		return fmt.Errorf("failed to save outbox event: %w", err)
+	}
+
+	return nil
 }

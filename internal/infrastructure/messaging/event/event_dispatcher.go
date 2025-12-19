@@ -10,7 +10,7 @@ import (
 	"authentication/internal/domain/events"
 	"authentication/internal/infrastructure/observability/metrics"
 	"authentication/shared/logging"
-	"authentication/shared/tracing"
+	"authentication/internal/application/contracts/observability"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -24,7 +24,7 @@ type CompositeEventDispatcher struct {
 	async    bool
 	mu       sync.RWMutex
 	logger   logging.Logger
-	tracer   tracing.Tracer
+	tracer   observability.Tracer
 	metrics  *metrics.MetricsRecorder
 }
 
@@ -32,7 +32,7 @@ type CompositeEventDispatcher struct {
 func NewCompositeEventDispatcher(
 	async bool,
 	logger logging.Logger,
-	tracer tracing.Tracer,
+	tracer observability.Tracer,
 	metricsRecorder *metrics.MetricsRecorder,
 ) messaging.EventDispatcher {
 	return &CompositeEventDispatcher{

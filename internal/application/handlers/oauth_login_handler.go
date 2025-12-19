@@ -9,6 +9,7 @@ import (
 	"authentication/internal/application/contracts/persistence"
 	"authentication/internal/application/contracts/services"
 	oauthService "authentication/internal/application/contracts/services"
+	"authentication/internal/application/dtos"
 	appDtos "authentication/internal/application/dtos"
 	"authentication/internal/domain"
 	"authentication/internal/domain/aggregates"
@@ -24,11 +25,11 @@ import (
 )
 
 type LoginOAuthUserHandler struct {
-	userRepo    repositories.UserRepository
-	sessionRepo repositories.SessionRepository
-	auditRepo   repositories.AuditRepository
-	uow         persistence.UnitOfWork
-	//outboxService *OutboxService
+	userRepo     repositories.UserRepository
+	sessionRepo  repositories.SessionRepository
+	auditRepo    repositories.AuditRepository
+	uow          persistence.UnitOfWork
+	outboxRepo   persistence.OutboxRepository
 	oauthService oauthService.OAuthService
 	tokenService services.TokenService
 	logger       logging.Logger
@@ -40,22 +41,20 @@ func NewLoginOAuthUserHandler(
 	sessionRepo repositories.SessionRepository,
 	auditRepo repositories.AuditRepository,
 	uow persistence.UnitOfWork,
-	//outboxService *OutboxService,
+	outboxRepo persistence.OutboxRepository,
 	oauthService oauthService.OAuthService,
 	tokenService services.TokenService,
 	logger logging.Logger,
-	tracer tracing.Tracer,
-) messaging.CommandHandler {
-	return &LoginOAuthUserHandler{
-		userRepo:    userRepo,
-		sessionRepo: sessionRepo,
-		auditRepo:   auditRepo,
-		uow:         uow,
-		//outboxService: outboxService,
+) messaging.CommandHandler[commands.RegisterOAuthUserCommand, dtos.RegisterOAuthUserResult] {
+	return &RegisterOAuthUserHandler{
+		userRepo:     userRepo,
+		sessionRepo:  sessionRepo,
+		auditRepo:    auditRepo,
+		uow:          uow,
+		outboxRepo:   outboxRepo,
 		oauthService: oauthService,
 		tokenService: tokenService,
 		logger:       logger.With(zap.String("handler", "login_oauth_user")),
-		tracer:       tracer,
 	}
 }
 
@@ -198,7 +197,7 @@ func (h *LoginOAuthUserHandler) loginOAuthUser(
 	tokenClaims := services.TokenClaims{
 		UserID:   user.ID(),
 		Email:    user.User.Email.String(),
-		Username: user.User.Username.String(), 
+		Username: user.User.Username.String(),
 		Role:     user.User.Role.String(),
 	}
 
@@ -240,7 +239,7 @@ func (h *LoginOAuthUserHandler) loginOAuthUser(
 	return &appDtos.LoginResult{
 		UserID:       user.ID(),
 		Email:        user.User.Email.String(),
-		Username:     user.User.Username.String(), 
+		Username:     user.User.Username.String(),
 		FirstName:    user.User.FirstName,
 		LastName:     user.User.LastName,
 		Role:         user.User.Role.String(),

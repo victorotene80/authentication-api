@@ -1,20 +1,19 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
-	"context"
 
 	"authentication/api/http/dtos"
 	"authentication/api/http/dtos/auth/request"
 	"authentication/api/http/dtos/auth/response"
 	"authentication/internal/application/contracts/messaging"
+	appDtos "authentication/internal/application/dtos"
 	"authentication/internal/domain"
 	"authentication/shared/logging"
 	"authentication/shared/utils"
-		appDtos "authentication/internal/application/dtos"
-
 
 	"github.com/go-playground/validator/v10"
 	"go.uber.org/zap"

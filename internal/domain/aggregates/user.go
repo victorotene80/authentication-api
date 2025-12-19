@@ -58,7 +58,6 @@ func NewOAuthUserAggregate(
 
     user := entities.NewUser(emptyUsername, email, emptyPassword, firstName, lastName, role, true, oauthProvider)
     user.ID = id
-    user.VerifyEmail()
 
     agg := &UserAggregate{
         AggregateRoot: NewAggregateRoot(id),
@@ -66,9 +65,10 @@ func NewOAuthUserAggregate(
         Sessions:      []*entities.Session{},
     }
 
-    agg.AddEvent(events.NewUserCreatedEvent(
+	agg.VerifyEmail()
+    /*agg.AddEvent(events.NewUserCreatedEvent(
         id, "", email.String(), role.String(),
-    ))
+    ))*/
 
     return agg
 }
@@ -146,3 +146,17 @@ func (u *UserAggregate) Activate() {
 	u.User.Activate()
 	u.IncrementVersion()
 }
+
+func (u *UserAggregate) VerifyEmail() {
+	if u.User.IsVerified {
+		return
+	}
+
+	u.User.VerifyEmail()
+	u.IncrementVersion()
+	u.AddEvent(events.NewUserEmailVerifiedEvent(
+		u.ID(),
+		u.User.Email.String(),
+	))
+}
+

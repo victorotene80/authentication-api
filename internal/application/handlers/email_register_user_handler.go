@@ -1,130 +1,103 @@
 package handlers
 
 import (
-	"context"
-	"fmt"
-
 	"authentication/internal/application/commands"
 	"authentication/internal/application/contracts/messaging"
 	"authentication/internal/application/contracts/persistence"
+	"authentication/internal/application/dtos"
 	"authentication/internal/domain"
 	"authentication/internal/domain/aggregates"
+	"authentication/internal/domain/events"
 	"authentication/internal/domain/repositories"
-	"authentication/internal/domain/services"
+	domainServices "authentication/internal/domain/services"
 	"authentication/internal/domain/valueobjects"
 	"authentication/shared/logging"
-	"authentication/shared/tracing"
+	"context"
+	"fmt"
 
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 )
 
 type RegisterEmailHandler struct {
 	userRepo       repositories.UserRepository
-	auditRepo      repositories.AuditRepository
+	outbox         persistence.OutboxRepository
 	uow            persistence.UnitOfWork
-	passwordHasher *services.PasswordHashingService
+	passwordHasher *domainServices.PasswordHashingService
 	logger         logging.Logger
-	tracer         tracing.Tracer
 }
 
 func NewRegisterEmailHandler(
 	userRepo repositories.UserRepository,
-	auditRepo repositories.AuditRepository,
+	outbox persistence.OutboxRepository,
 	uow persistence.UnitOfWork,
-	passwordHasher *services.PasswordHashingService,
+	passwordHasher *domainServices.PasswordHashingService,
 	logger logging.Logger,
-	tracer tracing.Tracer,
-) messaging.CommandHandler {
+) messaging.CommandHandler[commands.RegisterEmailUserCommand, dtos.RegisterEmailUserResult] {
 	return &RegisterEmailHandler{
 		userRepo:       userRepo,
-		auditRepo:      auditRepo,
+		outbox:         outbox,
 		uow:            uow,
 		passwordHasher: passwordHasher,
 		logger:         logger.With(zap.String("handler", "register_email")),
-		tracer:         tracer,
 	}
 }
 
-func (r *RegisterEmailHandler) Handle(ctx context.Context, cmd messaging.Command) error {
-	ctx, span := r.tracer.StartSpan(ctx, "RegisterEmailHandler.Handle",
-		trace.WithSpanKind(trace.SpanKindInternal))
-
-	defer span.End()
-
-	registerCmd, ok := cmd.(commands.RegisterEmailUserCommand)
-	if !ok {
-		err := fmt.Errorf("invalid command type: expected RegisterEmailUserCommand, got %T", cmd)
-		span.RecordError(err)
-		//span.SetStatus(codes.Error, err.Error())
-		return err
-	}
-
-	r.logger.Info(ctx, "Processing email user registration",
-		zap.String("email", registerCmd.Email),
-		zap.String("username", registerCmd.Username))
-
+func (r *RegisterEmailHandler) Handle(
+	ctx context.Context,
+	cmd commands.RegisterEmailUserCommand,
+) (dtos.RegisterEmailUserResult, error) {
 	defer func() {
 		if h := recover(); h != nil {
-			recErr := fmt.Errorf("panic: %v", h)
 			r.logger.Error(ctx, "Panic during email user registration",
 				zap.Any("panic", h),
-				zap.String("email", registerCmd.Email),
+				zap.String("email", cmd.Email),
 			)
-			r.logFailedRegistration(ctx, registerCmd, recErr)
-			panic(r)
+
+			_ = r.publishFailedUserCreatedEvent(ctx, cmd, fmt.Errorf("panic: %v", h))
+			panic(h)
 		}
 	}()
 
 	var user *aggregates.UserAggregate
 	err := r.uow.Execute(ctx, func(ctx context.Context) error {
 		var err error
-		user, err = r.registerEmailUser(ctx, registerCmd)
-		if err != nil {
-			return err
-		}
-		//return
-		//return h.outboxService.StoreEvents(ctx, user.GetEvents())
-		return nil
-
+		user, err = r.registerEmailUser(ctx, cmd)
+		return err
 	})
 
 	if err != nil {
-		r.logger.Error(ctx, "Email registration failed",
-			zap.String("email", registerCmd.Email),
-			zap.Error(err),
-		)
-
-		r.logFailedRegistration(ctx, registerCmd, err)
-		span.RecordError(err)
-		span.SetAttributes(attribute.String("registeration.status", "failed"))
-		return err
+		_ = r.publishFailedUserCreatedEvent(ctx, cmd, err)
+		return dtos.RegisterEmailUserResult{}, err
 	}
 
-	r.logSuccessfulRegistration(ctx, user, registerCmd)
+	if err := r.publishSuccessUserCreatedEvent(ctx, user, cmd); err != nil {
+		r.logger.Error(ctx, "Failed to publish user created event after email registration",
+			zap.Error(err),
+			zap.String("user_id", user.ID()),
+			zap.String("email", cmd.Email),
+		)
+	}
 
-	r.logger.Info(ctx, "Email user registered successfully",
-		zap.String("user_id", user.ID()),
-		zap.String("email", registerCmd.Email),
-		zap.String("username", registerCmd.Username),
-	)
+	result := dtos.RegisterEmailUserResult{
+		UserID:          user.ID(),
+		Email:           user.User.Email.String(),
+		Username:        user.User.Username.String(),
+		FirstName:       user.User.FirstName,
+		LastName:        user.User.LastName,
+		Role:            cmd.Role,
+		IsOAuthUser:     false,
+		OAuthProvider:   "",
+		RequiresOnboard: false,
+		IsNewUser:       true,
+	}
 
-	span.SetAttributes(
-		attribute.String("user.id", user.ID()),
-		attribute.String("registration.type", "email"),
-	)
-	//span.SetStatus(codes.Ok, "success")
-
-	return nil
-
+	return result, nil
 }
 
 func (r *RegisterEmailHandler) registerEmailUser(
 	ctx context.Context,
 	cmd commands.RegisterEmailUserCommand,
 ) (*aggregates.UserAggregate, error) {
-
 	emailVO, err := valueobjects.NewEmail(cmd.Email)
 	if err != nil {
 		return nil, fmt.Errorf("invalid email: %w", err)
@@ -135,7 +108,6 @@ func (r *RegisterEmailHandler) registerEmailUser(
 		return nil, fmt.Errorf("failed to check existing email: %w", err)
 	}
 	if exists {
-		//call login
 		return nil, domain.ErrEmailAlreadyInUse
 	}
 
@@ -165,49 +137,86 @@ func (r *RegisterEmailHandler) registerEmailUser(
 
 	if err := r.userRepo.Create(ctx, user); err != nil {
 		return nil, fmt.Errorf("failed to create user: %w", err)
+
 	}
+
+	r.logger.Info(ctx, "Email user registered successfully",
+		zap.String("user_id", user.ID()),
+		zap.String("email", cmd.Email),
+		zap.String("username", cmd.Username),
+	)
 
 	return user, nil
 }
 
-func (r *RegisterEmailHandler) logSuccessfulRegistration(
+func (r *RegisterEmailHandler) publishSuccessUserCreatedEvent(
 	ctx context.Context,
 	user *aggregates.UserAggregate,
 	cmd commands.RegisterEmailUserCommand,
-) {
-	_ = r.auditRepo.Create(ctx, &aggregates.AuditLog{
-		UserID:       user.User.ID,
-		ResourceID:   user.User.ID,
-		ResourceType: "user",
-		Action:       valueobjects.AuditActionUserRegistered,
-		Status:       "SUCCESS",
-		IPAddress:    cmd.IPAddress,
-		UserAgent:    cmd.UserAgent,
-		Metadata: map[string]any{
-			"type":     "email",
-			"username": user.User.Username.String(),
-			"email":    user.User.Email.String(),
-			"role":     cmd.Role,
-		},
-	})
+) error {
+	event := events.NewUserCreatedEvent(
+		user.ID(),
+		user.User.Username.String(),
+		user.User.Email.String(),
+		user.User.Role.String(),
+		user.User.FirstName,
+		user.User.LastName,
+		cmd.IPAddress,
+		cmd.UserAgent,
+		"SUCCESS",
+		"email",
+	)
+
+	outboxMsg := &persistence.OutboxMessage{
+		ID:          event.EventID().String(),
+		EventType:   event.EventName(),
+		AggregateID: event.AggregateID(),
+		Payload:     event.Payload(),
+		Metadata:    event.Metadata(),
+		OccurredAt:  event.OccurredAt().Unix(),
+	}
+
+	if err := r.outbox.Save(ctx, outboxMsg); err != nil {
+		return fmt.Errorf("failed to save outbox event: %w", err)
+	}
+
+	return nil
 }
 
-func (r *RegisterEmailHandler) logFailedRegistration(
+func (r *RegisterEmailHandler) publishFailedUserCreatedEvent(
 	ctx context.Context,
 	cmd commands.RegisterEmailUserCommand,
-	err error,
-) {
-	_ = r.auditRepo.Create(ctx, &aggregates.AuditLog{
-		Action:       valueobjects.AuditActionUserRegistered,
-		Status:       "FAILURE",
-		ResourceType: "user",
-		ErrorMessage: err.Error(),
-		IPAddress:    cmd.IPAddress,
-		UserAgent:    cmd.UserAgent,
-		Metadata: map[string]any{
-			"email":    cmd.Email,
-			"username": cmd.Username,
-			"type":     "email",
-		},
-	})
+	cause error,
+) error {
+
+	event := events.NewUserCreatedEvent(
+		"nil",
+		cmd.Username,
+		cmd.Email,
+		cmd.Role,
+		cmd.FirstName,
+		cmd.LastName,
+		cmd.IPAddress,
+		cmd.UserAgent,
+		"FAILURE",
+		"email",
+	)
+	meta := event.Metadata()
+	meta["error"] = cause.Error()
+
+	outboxMsg := &persistence.OutboxMessage{
+		ID:          event.EventID().String(),
+		EventType:   event.EventName(),
+		AggregateID: event.AggregateID(),
+		Payload:     event.Payload(),
+		Metadata:    event.Metadata(),
+		OccurredAt:  event.OccurredAt().Unix(),
+	}
+
+	if err := r.outbox.Save(ctx, outboxMsg); err != nil {
+		return fmt.Errorf("failed to save outbox event: %w", err)
+	}
+
+	return nil
+
 }

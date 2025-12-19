@@ -8,7 +8,7 @@ import (
 
 	uow "authentication/internal/application/contracts/persistence"
 	"authentication/internal/infrastructure/observability/metrics"
-	"authentication/shared/tracing"
+	"authentication/internal/application/contracts/observability"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -18,14 +18,14 @@ import (
 type instrumentedUnitOfWork struct {
 	*unitOfWork
 	logger  *zap.Logger
-	tracer  tracing.Tracer
+	tracer  observability.Tracer
 	metrics *metrics.MetricsRecorder
 }
 
 func NewInstrumentedUnitOfWork(
 	db *sql.DB,
 	logger *zap.Logger,
-	tracer tracing.Tracer,
+	tracer observability.Tracer,
 	metricsRecorder *metrics.MetricsRecorder,
 ) uow.UnitOfWork {
 	return &instrumentedUnitOfWork{
