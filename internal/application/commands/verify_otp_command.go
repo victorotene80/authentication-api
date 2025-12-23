@@ -1,8 +1,8 @@
 package commands
 
-type LoginEmailUserCommand struct {
+type VerifyLoginOTPCommand struct {
 	Email     string
-	Password  string
+	OTPCode   string
 	IPAddress string
 	UserAgent string
 	DeviceID  string

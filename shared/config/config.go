@@ -18,6 +18,7 @@ type Config struct {
 	Logging  LoggingConfig
 	Tracing  TracerConfig
 	Metrics  MetricsConfig
+	OTP      OTPConfig
 }
 
 type TracerConfig struct {
@@ -32,6 +33,13 @@ type TracerConfig struct {
 	BatchTimeout       time.Duration // exporter batch timeout
 	HTTPTimeout        time.Duration // HTTP client timeout for exporter
 	ShutdownTimeout    time.Duration // timeout when shutting down tracer provider
+}
+
+type OTPConfig struct {
+	Length         int
+	ExpiryDuration time.Duration
+	MaxAttempts    int
+	RateLimit      time.Duration // Minimum time between OTP requests
 }
 
 type PasswordPolicy struct {
@@ -195,4 +203,3 @@ func (a AppConfig) IsProduction() bool {
 func (a AppConfig) IsDevelopment() bool {
 	return a.Environment == "development"
 }
-

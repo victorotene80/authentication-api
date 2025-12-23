@@ -12,6 +12,3 @@ type RegisterEmailUserCommand struct {
 	DeviceID  string
 }
 
-func (c RegisterEmailUserCommand) CommandName() string {
-	return "RegisterEmailUser"
-}

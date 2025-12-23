@@ -2,23 +2,25 @@ package request
 
 import(
 	"github.com/go-playground/validator/v10"
-	"authentication/internal/application/commands"
 )
 
-type EmailLoginRequest struct {
-	Email    string `json:"email" validate:"required,email"`
-	Password string `json:"password" validate:"required,min=8"`
+type LoginEmailUserCommand struct {
+	Email     string
+	Password  string
+	IPAddress string
+	UserAgent string
+	DeviceID  string
 }
 
-func (r *EmailLoginRequest) Validate(v *validator.Validate) error {
+func (r *LoginEmailUserCommand) Validate(v *validator.Validate) error {
 	return v.Struct(r)
 }
 
-func (r *EmailLoginRequest) ToCommand(ip, ua string) commands.LoginEmailUserCommand {
-	return commands.LoginEmailUserCommand{
+/*func(r *LoginEmailUserCommand) ToCommand(ip, ua string) LoginEmailUserCommand {
+	return LoginEmailUserCommand{
 		Email:     r.Email,
 		Password:  r.Password,
 		IPAddress: ip,
 		UserAgent: ua,
 	}
-}
+}*/

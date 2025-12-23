@@ -6,17 +6,22 @@ import (
 	"github.com/go-playground/validator/v10"
 )
 
-type OAuthLoginRequest struct {
-	IDToken       string `json:"id_token" validate:"required"`
-	//OAuthProvider string `json:"oauth_provider" validate:"required,oneof=google github facebook apple"`
-	AccessToken   string `json:"access_token,omitempty"` // Optional, some providers need it
+type LoginOAuthUserCommand struct {
+	OAuthProvider string
+	IDToken       string
+	AccessToken   string
+	Email         string
+	IPAddress     string
+	UserAgent     string
+	DeviceID      string
 }
 
-func (r *OAuthLoginRequest) Validate(v *validator.Validate) error {
+
+func (r *LoginOAuthUserCommand) Validate(v *validator.Validate) error {
 	return v.Struct(r)
 }
 
-func (r *OAuthLoginRequest) ToCommand(ip, ua string) commands.LoginOAuthUserCommand {
+func (r *LoginOAuthUserCommand) ToCommand(ip, ua string) commands.LoginOAuthUserCommand {
 	return commands.LoginOAuthUserCommand{
 		OAuthProvider: "google",
 		IDToken:       r.IDToken,

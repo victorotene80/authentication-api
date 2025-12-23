@@ -21,6 +21,7 @@ func Load() (*Config, error) {
 		Logging:  loadLoggingConfig(),
 		Tracing:  loadTracingConfig(),
 		Metrics:  loadMetricsConfig(),
+		OTP:      loadOTPConfig(),
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -36,6 +37,15 @@ func loadAppConfig() AppConfig {
 		Version:     getEnvOrDefault("APP_VERSION", "1.0.0"),
 		Environment: getEnvOrDefault("APP_ENV", "development"),
 		Debug:       getEnvBool("APP_DEBUG", true),
+	}
+}
+
+func loadOTPConfig() OTPConfig {
+	return OTPConfig{
+		Length:         getEnvInt("OTP_LENGTH", 6),
+		ExpiryDuration: getEnvDuration("OTP_EXPIRY_DURATION", 5*time.Minute),
+		MaxAttempts:    getEnvInt("OTP_MAX_ATTEMPTS", 5),
+		RateLimit:      getEnvDuration("OTP_RATE_LIMIT", 1*time.Minute),
 	}
 }
 

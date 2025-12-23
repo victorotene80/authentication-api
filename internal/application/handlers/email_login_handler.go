@@ -2,20 +2,20 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"authentication/internal/application/commands"
 	"authentication/internal/application/contracts/messaging"
 	"authentication/internal/application/contracts/persistence"
 	"authentication/internal/application/contracts/services"
-	appDtos "authentication/internal/application/dtos"
+	"authentication/internal/application/dtos"
 	"authentication/internal/domain"
 	"authentication/internal/domain/aggregates"
 	"authentication/internal/domain/repositories"
 	domainServices "authentication/internal/domain/services"
 	"authentication/internal/domain/valueobjects"
 	"authentication/shared/logging"
-	"authentication/shared/tracing"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -23,226 +23,273 @@ import (
 	"go.uber.org/zap"
 )
 
-type LoginEmailUserHandler struct {
+type LoginEmailHandler struct {
 	userRepo       repositories.UserRepository
 	sessionRepo    repositories.SessionRepository
-	auditRepo      repositories.AuditRepository
+	outbox         persistence.OutboxRepository
 	uow            persistence.UnitOfWork
-	//outboxService  *OutboxService
 	passwordHasher *domainServices.PasswordHashingService
 	tokenService   services.TokenService
+	otpService     services.OTPService
 	logger         logging.Logger
-	tracer         tracing.Tracer
 }
 
-func NewLoginEmailUserHandler(
+func NewLoginEmailHandler(
 	userRepo repositories.UserRepository,
 	sessionRepo repositories.SessionRepository,
-	auditRepo repositories.AuditRepository,
+	outbox persistence.OutboxRepository,
 	uow persistence.UnitOfWork,
-	//outboxService *OutboxService,
 	passwordHasher *domainServices.PasswordHashingService,
 	tokenService services.TokenService,
+	otpService services.OTPService,
 	logger logging.Logger,
-	tracer tracing.Tracer,
-) messaging.CommandHandler {
-	return &LoginEmailUserHandler{
+) messaging.CommandHandler[commands.LoginEmailUserCommand, dtos.LoginEmailUserResult] {
+	return &LoginEmailHandler{
 		userRepo:       userRepo,
 		sessionRepo:    sessionRepo,
-		auditRepo:      auditRepo,
+		outbox:         outbox,
 		uow:            uow,
-		//outboxService:  outboxService,
 		passwordHasher: passwordHasher,
 		tokenService:   tokenService,
-		logger:         logger.With(zap.String("handler", "login_email_user")),
-		tracer:         tracer,
+		otpService:     otpService,
+		logger:         logger.With(zap.String("handler", "login_email")),
 	}
 }
 
-func (h *LoginEmailUserHandler) Handle(ctx context.Context, cmd messaging.Command) error {
-	ctx, span := h.tracer.StartSpan(ctx, "LoginEmailUserHandler.Handle",
-		trace.WithSpanKind(trace.SpanKindInternal),
-	)
-	defer span.End()
-
-	loginCmd, ok := cmd.(commands.LoginEmailUserCommand)
-	if !ok {
-		err := fmt.Errorf("invalid command type: expected LoginEmailUserCommand, got %T", cmd)
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "invalid command type")
-		return err
-	}
-
-	h.logger.Info(ctx, "Processing email login",
-		zap.String("email", loginCmd.Email),
-	)
-
-	defer func() {
-		if r := recover(); r != nil {
-			recErr := fmt.Errorf("panic: %v", r)
-			h.logger.Error(ctx, "Panic during email login",
+func (h *LoginEmailHandler) Handle(
+	ctx context.Context,
+	cmd commands.LoginEmailUserCommand,
+) (dtos.LoginEmailUserResult, error) {
+	defer func(){
+		if r := recover(); r != nil{
+			h.logger.Error(ctx, "Panic during email user login",
 				zap.Any("panic", r),
-				zap.String("email", loginCmd.Email),
+				zap.String("email", cmd.Email),
 			)
-			h.logFailedLogin(ctx, loginCmd.Email, loginCmd.IPAddress, loginCmd.UserAgent, recErr)
-			//panic(r)
+			_ = h.publishFailedLoginEvent(ctx, cmd, fmt.Errorf("panic: %v", r))
+			panic(r)
 		}
 	}()
 
-	var result *appDtos.LoginResult
+	emailVO, err := valueobjects.NewEmail(cmd.Email)
+	if err != nil {
+		_ = h.publishFailedLoginEvent(ctx, cmd, err)
+		return dtos.LoginEmailUserResult{}, err
+	}
+
+	user, err := h.userRepo.FindByEmail(ctx, emailVO)
+	if err != nil {
+		if err == domain.ErrUserNotFound {
+			_ = h.publishFailedLoginEvent(ctx, cmd, err)
+			return dtos.LoginEmailUserResult{}, domain.ErrInvalidCredentials
+		}
+
+		return dtos.LoginEmailUserResult{}, fmt.Errorf("error fetching user by email: %w", err)
+	}
+
+	if !user.User.IsActive{
+		_ = h.publishFailedLoginEvent(ctx, cmd, domain.ErrUserInactive)
+		return dtos.LoginEmailUserResult{}, domain.ErrUserInactive
+	}
+
+	if user.User.IsOAuthUser(){
+		return h.handleOAuthUserLogin(ctx, user, cmd)
+	}
+
+	if !h.passwordHasher.Verify(cmd.Password, user.User.Password){
+		_ = h.publishFailedLoginEvent(ctx, cmd, domain.ErrInvalidCredentials)
+		return dtos.LoginEmailUserResult{}, domain.ErrInvalidCredentials
+	}
+
+	if !user.User.IsVerified{
+		return dtos.LoginEmailUserResult{}, domain.ErrEmailNotVerified()
+	}
+
+	return h.generateTokensAndLogin(ctx, user, cmd)
+}
+
+func (h *LoginEmailHandler) handleOAuthUserLogin(
+	ctx context.Context,
+	user *aggregates.UserAggregate,
+	cmd commands.LoginEmailUserCommand,
+) (dtos.LoginEmailUserResult, error){
+
+	isLimited, err := h.otpService.IsRateLimited(ctx, cmd.Email)
+	if err != nil {
+		return dtos.LoginEmailUserResult{}, fmt.Errorf("failed to check OTP rate limit: %w", err)
+	}
+
+	if isLimited {
+		return dtos.LoginEmailUserResult{}, domain.ErrOTPRateLimited
+	}
+
+	otpCode, err := h.otpService.Generate(ctx, cmd.Email, services.OTPPurposeLogin)
+	if err != nil{
+		return dtos.LoginEmailUserResult{}, fmt.Errorf("failed to generate login OTP: %w", err)
+	}
+
+	if err := h.otpService.SendEmail(ctx, cmd.Email, otpCode, services.OTPPurposeLogin); err != nil {
+		h.logger.Error(ctx, "Failed to send OTP email",
+			zap.Error(err),
+			zap.String("email", cmd.Email),
+		)
+		return dtos.LoginEmailUserResult{}, fmt.Errorf("failed to send OTP: %w", err)
+	}
+
+	return dtos.LoginEmailUserResult{
+		Email: cmd.Email,
+		RequiresOTP: true,
+		OTPSent: true,
+		Message: fmt.Sprintf("This account uses %s for sign-in. We've sent a verification code to your email.", user.User.Provider())
+	}, nil
+
+}
+
+
+func (h *LoginEmailHandler) generateTokensAndLogin(
+	ctx contect.Context,
+	user *aggregates.UserAggregate,
+	cmd commands.LoginEmailUserCommand,
+)(dtos.LoginEmailUserResult, error){
+	var session *aggregates.Session
+	var tokenPair services.TokenPair
+
 	err := h.uow.Execute(ctx, func(ctx context.Context) error {
+		metadata := services.SessionMetadata{
+			IPAddress: cmd.IPAddress,
+			UserAgent: cmd.UserAgent,
+			DeviceID: cmd.DeviceID,
+		}
+	
+
 		var err error
-		result, err = h.loginEmailUser(ctx, loginCmd)
-		return err
+		tokenPair, err = h.tokenService.Generate(
+			ctx, 
+			user.ID(),
+			user.User.Role.String(),
+			user.User.Email.String()
+			metadata,
+		)
+
+		if err != nil{
+			return fmt.Errorf("failed to generate tokens: %w", err)
+		}
+
+		sessionEntity := user.Login(
+			cmd.IPAddress,
+			cmd.UserAgent,
+			cmd.DeviceID,
+			tokenPair.RefreshToken,
+			tokenPair.AccessToken,
+			tokenPair.ExpiresAt,
+		)
+
+		if err := h.sessionRepo.Create(ctx, sessionEntity); err != nil{
+			return fmt.Errorf("failed to create session: %w", err)
+		}
+
+		if err := h.userRepo.Update(ctx, user); err != nil{
+			return fmt.Errorf("failed to update user last login: %w", err)
+		}
+
+		session = sessionEntity
+		return nil
 	})
 
 	if err != nil {
-		h.logger.Error(ctx, "Email login failed",
-			zap.Error(err),
-			zap.String("email", loginCmd.Email),
-		)
-		h.logFailedLogin(ctx, loginCmd.Email, loginCmd.IPAddress, loginCmd.UserAgent, err)
-		span.RecordError(err)
-		span.SetAttributes(attribute.String("login.status", "failed"))
-		return err
-	}
+		_ = h.publishFailedLoginEvent(ctx, cmd, err)
+		return dtos.LoginEmailUserResult{}, err
+	}	
 
-	h.logSuccessfulLogin(ctx, result.UserID, loginCmd.Email, loginCmd.IPAddress, loginCmd.UserAgent)
+	if err := h.publishSuccessLoginEvent(ctx, user, cmd); err != nil{
+		h.logger.Error(ctx, "Failed to publish login success event",)
+			zap.Error(err),
+			zap.String("user_id", user.ID()),
+	}
 
 	h.logger.Info(ctx, "Email user logged in successfully",
-		zap.String("user_id", result.UserID),
-		zap.String("email", loginCmd.Email),
+		zap.String("user_id", user.ID()),
+		zap.String("email", cmd.Email),
+		zap.String("session_id", session.ID()),
 	)
 
-	span.SetAttributes(
-		attribute.String("user.id", result.UserID),
-		attribute.String("login.type", "email"),
-	)
-	span.SetStatus(codes.Ok, "success")
-
-	// Store result in context for HTTP handler to retrieve
-	ctx = context.WithValue(ctx, "login_result", result)
-
-	return nil
-}
-
-func (h *LoginEmailUserHandler) loginEmailUser(
-	ctx context.Context,
-	cmd commands.LoginEmailUserCommand,
-) (*appDtos.LoginResult, error) {
-	email, err := valueobjects.NewEmail(cmd.Email)
-	if err != nil {
-		return nil, fmt.Errorf("invalid email: %w", err)
-	}
-
-	user, err := h.userRepo.FindByEmail(ctx, email)
-	if err != nil {
-		if err == domain.ErrUserNotFound {
-			return nil, domain.ErrInvalidCredentials
-		}
-		return nil, fmt.Errorf("failed to find user: %w", err)
-	}
-
-	if user.User.IsOAuthUser() {
-		//send OTP to email user logs in with the OTP generated 
-		return nil, fmt.Errorf("this account uses OAuth login with %s", user.User.Provider())
-	}
-
-	if !user.User.IsActive {
-		return nil, domain.ErrUserLocked
-	}
-
-	if !h.passwordHasher.Verify(cmd.Password, user.User.Password) {
-		return nil, domain.ErrInvalidCredentials
-	}
-
-	if !user.User.IsVerified {
-		return nil, fmt.Errorf("email not verified")
-	}
-
-	tokenClaims := services.TokenClaims{
-		UserID:   user.ID(),
-		Email:    user.User.Email.String(),
-		Username: user.User.Username.String(),
-		Role:     user.User.Role.String(),
-	}
-
-	tokens, err := h.tokenService.Generate(ctx, tokenClaims)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate tokens: %w", err)
-	}
-
-	session := user.Login(
-		cmd.IPAddress,
-		cmd.UserAgent,
-		tokens.RefreshToken,
-		tokens.AccessToken,
-		tokens.ExpiresAt,
-	)
-
-	if err := h.sessionRepo.Create(ctx, session); err != nil {
-		return nil, fmt.Errorf("failed to create session: %w", err)
-	}
-
-	user.User.RecordLogin()
-
-	if err := h.userRepo.Update(ctx, user); err != nil {
-		return nil, fmt.Errorf("failed to update user: %w", err)
-	}
-
-	// Store events in outbox
-	//if err := h.outboxService.StoreEvents(ctx, user.GetEvents()); err != nil {
-	//	return nil, fmt.Errorf("failed to store events: %w", err)
-	//}
-
-	return &appDtos.LoginResult{
+	return dtos.LoginEmailUserResult{
 		UserID:       user.ID(),
 		Email:        user.User.Email.String(),
 		Username:     user.User.Username.String(),
 		FirstName:    user.User.FirstName,
 		LastName:     user.User.LastName,
 		Role:         user.User.Role.String(),
-		AccessToken:  tokens.AccessToken,
-		RefreshToken: tokens.RefreshToken,
-		ExpiresAt:    tokens.ExpiresAt.Unix(),
-		IsNewUser:    false,
+		RequiresOTP: false,
+		AccessToken:  tokenPair.AccessToken,
+		RefreshToken: tokenPair.RefreshToken,
+		ExpiresAt:    tokenPair.ExpiresAt.Unix(),
+		ExpiresIn:    int64(tokenPair.ExpiresAt.Sub(services.Now()).Seconds()),
+		SessionID:    session.ID(),
 	}, nil
 }
 
-func (h *LoginEmailUserHandler) logSuccessfulLogin(
+func (h *LoginEmailHandler) publishSuccessLoginEvent(
 	ctx context.Context,
-	userID, email, ipAddress, userAgent string,
-) {
-	_ = h.auditRepo.Create(ctx, &aggregates.AuditLog{
-		UserID:       userID,
-		ResourceID:   userID,
-		ResourceType: "user",
-		Action:       valueobjects.AuditActionUserLoggedIn,
-		Status:       "SUCCESS",
-		IPAddress:    ipAddress,
-		UserAgent:    userAgent,
-		Metadata: map[string]any{
-			"email":      email,
-			"login_type": "email",
-		},
-	})
+	user *aggregates.UserAggregate,
+	cmd commands.LoginEmailUserCommand,
+) error{
+	event := domain.NewUserLoginEvent(
+		user.ID(),
+		user.User.Email.String(),
+		cmd.IPAddress,
+		cmd.UserAgent,
+		cmd.DeviceID,
+		"SUCCESS",
+		"email"
+	)
+
+	outboxMsg := &persistence.OutboxMessage{
+		ID:          event.EventID().String(),
+		EventType:   event.EventName(),
+		AggregateID: event.AggregateID(),
+		Payload:     event.Payload(),
+		Metadata:    event.Metadata(),
+		OccurredAt:  event.OccurredAt().Unix(),
+	}
+	
+	if err := h.outbox.Save(ctx, outboxMsg); err != nil {
+		return fmt.Errorf("failed to save outbox event: %w", err)
+	}
+
+	return nil
 }
 
-func (h *LoginEmailUserHandler) logFailedLogin(
-	ctx context.Context,
-	email, ipAddress, userAgent string,
-	err error,
-) {
-	_ = h.auditRepo.Create(ctx, &aggregates.AuditLog{
-		Action:       valueobjects.AuditActionUserLoggedIn,
-		Status:       "FAILURE",
-		ResourceType: "user",
-		ErrorMessage: err.Error(),
-		IPAddress:    ipAddress,
-		UserAgent:    userAgent,
-		Metadata: map[string]any{
-			"email":      email,
-			"login_type": "email",
-		},
-	})
+func (h *LoginEmailHandler) publishFailedLoginEvent(
+	ctx context.Context, 
+	cmd commands.LoginEmailUserCommand,
+	cause error,
+) error{
+	event := domain.NewUserLoginEvent(
+		"nil",
+		cmd.Email,
+		cmd.IPAddress,
+		cmd.UserAgent,
+		cmd.DeviceID,
+		"FAILURE",
+		"email",
+	)
+
+	meta := event.Metadata()
+	meta["error"] = cause.Error()
+
+	outboxMsg := &persistence.OutboxMessage{
+		ID:          event.EventID().String(),
+		EventType:   event.EventName(),
+		AggregateID: event.AggregateID(),
+		Payload:     event.Payload(),
+		Metadata:    event.Metadata(),
+		OccurredAt:  event.OccurredAt().Unix(),
+	}
+
+	if err := h.outbox.Save(ctx, outboxMsg); err != nil {
+		return fmt.Errorf("failed to save outbox event: %w", err)
+	}
+
+	return nil
 }

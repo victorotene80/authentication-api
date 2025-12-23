@@ -45,14 +45,14 @@ var (
 
 	// OAuth errors
 	ErrOAuthVerificationFailed   = errors.New("oauth verification failed")
-	ErrOAuthEmailNotVerified     = errors.New("oauth email not verified")
+	ErrEmailNotVerified          = errors.New("email not verified")
 	ErrOAuthProviderNotSupported = errors.New("oauth provider not supported")
-	
-	// Authentication errors
-	ErrInvalidToken         = errors.New("invalid token")
-	ErrTokenExpired         = errors.New("token expired")
-	
-	// OAuth errors
-	ErrOAuthProviderMismatch     = errors.New("email registered with different oauth provider")
 
+	// Authentication errors
+	ErrInvalidToken = errors.New("invalid token")
+	ErrTokenExpired = errors.New("token expired")
+
+	// OAuth errors
+	ErrOAuthProviderMismatch = errors.New("email registered with different oauth provider")
+	ErrOTPRateLimited 	 = errors.New("otp requests are rate limited, please try again later")
 )
